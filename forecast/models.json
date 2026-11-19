@@ -1,0 +1,16 @@
+[
+  {
+    "id": "chronos",
+    "name": "Chronos-2",
+    "repo": "amazon/chronos-2",
+    "revision": "29ec3766d36d6f73f0696f85560a422f50e8498c",
+    "sha256": "ddcda3c7508bf2528087723e98a20707cc04b7f370ae275a9fd88078ddba4f42"
+  },
+  {
+    "id": "simons",
+    "name": "Simons-297M",
+    "repo": "abel-lab/Simons-297M",
+    "revision": "335dc22e4ce26ca0a8bc567de9e93dbb1bd2ce3a",
+    "sha256": "719cd65ac2ac9d83588552e801aadb1043cbf967c7b545caae49e2dc0d05751d"
+  }
+]

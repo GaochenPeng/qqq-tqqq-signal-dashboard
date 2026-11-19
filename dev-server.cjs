@@ -30,6 +30,9 @@ const server = http.createServer((req, res) => {
   if (parsed.pathname === "/api/market") return require("./api/market")(req, res);
   if (parsed.pathname === "/api/backtest") return require("./api/backtest")(req, res);
   if (parsed.pathname === "/api/health") return require("./api/health")(req, res);
+  if (parsed.pathname === "/api/cn-etf-market") return require("./api/cn-etf-market")(req, res);
+  if (parsed.pathname === "/api/cn-etf-backtest") return require("./api/cn-etf-backtest")(req, res);
+  if (parsed.pathname === "/api/cn-etf-forecast") return require("./api/cn-etf-forecast")(req, res);
   const requested = parsed.pathname === "/" ? "/index.html" : parsed.pathname;
   let pathname;
   try {
@@ -49,6 +52,13 @@ const server = http.createServer((req, res) => {
     res.statusCode = 403;
     res.end("Forbidden");
     return;
+  }
+  // 只公开页面、浏览器资源与市场快照，本机配置和模型缓存不走静态服务。
+  const publicPath = path.relative(root, filePath);
+  if (!["index.html", "cn-etf.html"].includes(publicPath)
+      && !/^(assets[\/].+\.(?:js|css)|data[\/][\w-]+\.json)$/.test(publicPath)) {
+    res.statusCode = 404;
+    return res.end("Not found");
   }
   serveFile(res, filePath);
 });

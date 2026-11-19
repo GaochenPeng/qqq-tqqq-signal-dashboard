@@ -3,3 +3,11 @@ node_modules/
 .DS_Store
 *.log
 .gstack/
+
+.env.local
+forecast/.venv/
+forecast/__pycache__/
+forecast/.models/
+node_modules/
+data/cn-etf-history.json
+data/cn-etf-premium-history.json

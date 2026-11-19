@@ -1,0 +1,14 @@
+[project]
+name = "nasdaq-etf-forecast"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "chronos-forecasting==2.3.2",
+  "simons",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+simons = { git = "https://github.com/Abel-ai-lab/Simons.git", rev = "0d0042f8da45140172bd36980be08654c0017d8b" }

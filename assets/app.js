@@ -44,6 +44,7 @@ const copy = {
     decisionKicker: "本月有效动作",
     loadingAction: "加载中",
     loadingOperation: "正在拉取市场数据。",
+    cnEtfLink: "场内 ETF 分析",
     refreshData: "刷新数据",
     refreshingData: "刷新中...",
     confidenceLabel: "信号强度",
@@ -338,6 +339,7 @@ const copy = {
     decisionKicker: "Effective month action",
     loadingAction: "Loading",
     loadingOperation: "Fetching market data.",
+    cnEtfLink: "China ETF analysis",
     refreshData: "Refresh data",
     refreshingData: "Refreshing...",
     confidenceLabel: "Rule strength",
@@ -1123,6 +1125,8 @@ function renderStatic() {
   $("eyebrow").textContent = t.eyebrow;
   $("title").textContent = t.title;
   $("subtitle").textContent = t.subtitle;
+  const cnEtfLinkLabel = $("cnEtfLinkLabel");
+  if (cnEtfLinkLabel) cnEtfLinkLabel.textContent = t.cnEtfLink;
   $("refreshDataBtn").textContent = t.refreshData;
   $("decisionKicker").textContent = t.decisionKicker;
   $("confidenceLabel").textContent = t.confidenceLabel;

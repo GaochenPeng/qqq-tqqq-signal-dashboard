@@ -1951,6 +1951,7 @@ module.exports = {
   // Appended for scripts/tqqq-sleeve-study.cjs: reuse the production cash-drip
   // rule verbatim instead of copying it. Purely additive; no logic changed.
   monthlySpendWithDrip,
+  applySignalQqqAction,
   // Appended for scripts/cape-percentile-convention-study.cjs: lets the study
   // regression-test that passing the production percentile explicitly through
   // the buildStates seam is byte-identical to the default call. Purely

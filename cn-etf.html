@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="查看沪深场内 ETF 的行情、溢价与持有成本，并用人民币成交历史回测。" />
+  <title>场内 ETF 分析</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <link rel="stylesheet" href="/assets/etf-cost.css" />
+  <script type="module" src="/assets/etf-cost.js"></script>
+  <script type="module" src="/assets/etf-backtest.js"></script>
+  <script type="module" src="/assets/etf-forecast.js"></script>
+</head>
+<body>
+  <main class="shell etf-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">沪深场内 · 人民币</p>
+        <h1>场内 ETF 分析</h1>
+      </div>
+      <a class="etf-entry-link" href="/">← 返回三信号仪表盘</a>
+    </header>
+
+    <nav class="etf-page-nav" aria-label="场内 ETF 页面">
+      <a href="#etfBacktestSection">场内 ETF 回测</a>
+      <a href="#etfMarketSection">行情与成本</a>
+      <a href="#etfForecastSection">20 日预测</a>
+    </nav>
+
+    <section id="etfBacktestSection" class="etf-panel" aria-labelledby="etfBacktestTitle">
+      <h2 id="etfBacktestTitle">场内 ETF 回测</h2>
+      <p class="muted etf-backtest-intro">用你选的 ETF 在沪深交易所的人民币日线，比较期末资产和最大回撤。</p>
+
+      <form id="etfBacktestForm">
+        <fieldset class="etf-fund-picker">
+          <legend>选择 ETF</legend>
+          <div id="etfBacktestFunds"></div>
+        </fieldset>
+        <div class="etf-backtest-controls">
+          <label>开始日期 <input id="etfBacktestStart" type="date" required disabled /></label>
+          <label>结束日期 <input id="etfBacktestEnd" type="date" required disabled /></label>
+          <button id="etfRunBacktest" type="submit" disabled>运行回测</button>
+        </div>
+      </form>
+
+      <p id="etfBacktestStatus" class="etf-status muted" role="status">正在载入回测…</p>
+      <div id="etfBacktestResult" hidden>
+        <div class="etf-backtest-controls etf-backtest-views">
+          <label>查看范围 <select id="etfBacktestView"></select></label>
+          <label id="etfPremiumChoice" hidden>曲线的溢价门槛 <select id="etfPremiumLimit"></select></label>
+        </div>
+        <p id="etfBacktestScope" class="etf-status muted"></p>
+        <ul id="etfBacktestLegend" class="etf-legend" aria-label="回测策略图例"></ul>
+        <div class="etf-equity-wrap">
+          <p class="etf-equity-unit muted">账户资产（万元）</p>
+          <canvas id="etfEquityChart" role="img" aria-label="所选范围的各策略日度账户资产走势"></canvas>
+        </div>
+        <p id="etfEquityReadout" class="etf-equity-readout muted"></p>
+        <div class="etf-table-wrap" tabindex="0" role="region" aria-label="场内回测结果">
+          <table class="etf-table">
+            <thead>
+              <tr>
+                <th scope="col">策略</th>
+                <th scope="col">期末资产</th>
+                <th scope="col">累计收益</th>
+                <th scope="col">最大回撤</th>
+                <th scope="col">买入次数</th>
+                <th scope="col">期末现金</th>
+              </tr>
+            </thead>
+            <tbody id="etfBacktestRows"></tbody>
+          </table>
+        </div>
+        <p id="etfSignalNotes" class="etf-status muted"></p>
+        <p id="etfPremiumNotes" class="etf-status muted"></p>
+        <details id="etfPremiumPurchases" class="etf-backtest-method" hidden>
+          <summary>所选门槛的模拟买入明细</summary>
+          <p id="etfPremiumNoPurchases" class="muted" hidden>该门槛在所选期间没有买入。</p>
+          <div id="etfPremiumFillsWrap" class="etf-table-wrap" tabindex="0" role="region" aria-label="门槛成交明细">
+            <table class="etf-table">
+              <thead>
+                <tr>
+                  <th scope="col">买入日期</th>
+                  <th scope="col">ETF</th>
+                  <th scope="col">实际开盘价</th>
+                  <th scope="col">使用的净值</th>
+                  <th scope="col">净值估值日</th>
+                  <th scope="col">开盘估算折溢价</th>
+                </tr>
+              </thead>
+              <tbody id="etfPremiumFills"></tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+      <details class="etf-backtest-method">
+        <summary>回测怎么算</summary>
+        <p class="muted">100 万元期初到位，给所选 ETF 分配相同起始预算。一次投入在首个共同交易日买入。12 笔分批从首月起，在每个月第一个共同交易日投入相同金额。三信号策略每月释放一份预算，沿用项目的无杠杆买卖规则，美股收盘后的信号在下一个可交易的共同开盘执行，同一开盘前有多条信号时使用最新一条。</p>
+        <p class="muted">成交按前复权开盘价模拟，允许小数份额，按共同交易日收盘价计入资产和回撤。交易摩擦每边 0.05%，现金利息按零。场内价格已反映基金费用和历史折溢价。三信号估值使用项目已有的 CAPE 历史近似。</p>
+        <p class="muted">组合用 100 万元等预算持有所选 ETF，单只视图独立用 100 万元回测。买入次数按每只 ETF 实际模拟成交的一笔算，减仓与未成交的信号不计。</p>
+        <p class="muted">等低溢价策略在区间内每个月第一个可交易开盘检查。以未复权开盘价和当时可用的历史单位净值估算折溢价，净值按估值日后第三个沪深交易日开盘才可使用。开盘价满足盘前限价时，模拟一次用完该 ETF 的预算。等待期间持有现金。</p>
+        <p class="etf-sources">
+          <a href="https://quote.eastmoney.com/sz159660.html">东方财富日线</a>
+          <a href="https://fundf10.eastmoney.com/jjjz_159660.html">官方单位净值转载</a>
+          <a href="https://www.99fund.com/announcement/zx/upload/2026/20260319/82c0a408e7bf4cdbb24f9ab7137af530.pdf">净值披露规则</a>
+        </p>
+      </details>
+    </section>
+
+    <section id="etfForecastSection" class="etf-panel" aria-labelledby="etfForecastTitle">
+      <div class="etf-panel-head">
+        <div>
+          <h2 id="etfForecastTitle">未来 20 个交易日</h2>
+          <p id="etfForecastStatus" class="muted" role="status">正在读取本地预测库…</p>
+        </div>
+        <button id="etfForecastRun" type="button" disabled>更新预测</button>
+      </div>
+      <div id="etfForecastResult" hidden>
+        <div class="etf-backtest-controls etf-backtest-views">
+          <label>查看模型 <select id="etfForecastModel"></select></label>
+        </div>
+        <p id="etfForecastMeta" class="muted etf-status"></p>
+        <ol id="etfForecastRanges" class="etf-chart etf-forecast-ranges" aria-label="预测人民币收益的 P10 至 P90 区间"></ol>
+        <div class="etf-table-wrap" tabindex="0" role="region" aria-label="历史检验">
+          <table class="etf-table">
+            <thead>
+              <tr>
+                <th scope="col">历史检验</th>
+                <th scope="col">分位数误差</th>
+                <th scope="col">中位预测误差</th>
+                <th scope="col">区间覆盖率</th>
+                <th scope="col">区间平均宽度</th>
+              </tr>
+            </thead>
+            <tbody id="etfForecastScores"></tbody>
+          </table>
+        </div>
+        <p id="etfForecastEvidence" class="muted etf-status"></p>
+        <p id="etfForecastWarnings" class="muted etf-status" hidden></p>
+      </div>
+    </section>
+
+    <section id="etfMarketSection" aria-label="行情与成本">
+      <div class="etf-market-toolbar">
+        <div>
+          <p id="etfSnapshotTime" class="muted"></p>
+          <p id="etfLoading" class="muted" role="status">正在获取最新行情…</p>
+        </div>
+        <button id="etfRefresh" class="ghost" type="button">刷新行情</button>
+      </div>
+      <p id="etfError" class="error" role="alert" hidden></p>
+
+      <div id="etfCostView" hidden>
+        <section class="etf-panel" aria-labelledby="etfRankTitle">
+          <div class="etf-panel-head">
+            <div>
+              <h2 id="etfRankTitle">综合成本排名</h2>
+              <p id="etfScope" class="muted"></p>
+            </div>
+            <label class="etf-horizon" for="etfYears">
+              持有期
+              <select id="etfYears">
+                <option value="0">仅看入场</option>
+                <option value="1" selected>1 年</option>
+                <option value="2">2 年</option>
+                <option value="3">3 年</option>
+                <option value="5">5 年</option>
+                <option value="8">8 年</option>
+                <option value="10">10 年</option>
+              </select>
+            </label>
+          </div>
+          <p id="etfQuoteStatus" class="etf-status muted" role="status"></p>
+
+          <div class="etf-leader" aria-live="polite">
+            <p>成本最低 <strong id="etfLeaderName"></strong></p>
+            <p id="etfLeaderGap" class="muted"></p>
+          </div>
+
+          <ul class="etf-legend" aria-label="图例">
+            <li><span class="etf-swatch etf-premium" aria-hidden="true"></span>入场溢价</li>
+            <li><span class="etf-swatch etf-holding" aria-hidden="true"></span>管理费及托管费</li>
+          </ul>
+          <div class="etf-chart-grid etf-chart-axis" aria-hidden="true">
+            <span></span>
+            <div id="etfAxis"></div>
+            <span>万元</span>
+          </div>
+          <ol id="etfChart" class="etf-chart" aria-label="按综合成本从低到高排列"></ol>
+        </section>
+
+        <details class="etf-panel etf-details">
+          <summary>盘口和费率明细</summary>
+          <div class="etf-table-wrap" tabindex="0" role="region" aria-label="基金费率和买入成本">
+            <table class="etf-table" aria-label="按综合成本从低到高排列">
+              <thead>
+                <tr>
+                  <th scope="col">基金</th>
+                  <th scope="col">场内价</th>
+                  <th scope="col">参考净值 IOPV</th>
+                  <th scope="col">场内溢价</th>
+                  <th scope="col">估算买入价</th>
+                  <th scope="col">估算买入溢价</th>
+                  <th scope="col">管理费 / 年</th>
+                  <th scope="col">托管费 / 年</th>
+                  <th scope="col">综合成本</th>
+                </tr>
+              </thead>
+              <tbody id="etfCostRows"></tbody>
+            </table>
+          </div>
+        </details>
+
+        <section class="etf-panel" aria-labelledby="etfMethodTitle">
+          <h2 id="etfMethodTitle" class="etf-method-title">测算口径</h2>
+          <p class="muted">以盘口或最新成交价估算买入，每手 100 份，余款保留为现金。假设人民币计价的标的持平，期末按净值退出，持有期间从净值扣除管理费和托管费。券商佣金和其他运作费用另计。IOPV 是行情源提供的份额参考净值。</p>
+          <p class="etf-sources">
+            <a href="https://qt.gtimg.cn/q=sz159501,sz159513,sz159632,sz159659,sz159660,sz159696,sz159941,sh513100,sh513110,sh513300,sh513390,sh513870">盘口来源</a>
+            <a href="https://qdiilens.com/indices/nasdaq-100">同指数基金名单</a>
+            <a href="https://qdiilimit.com/">基金费率对照</a>
+          </p>
+        </section>
+      </div>
+    </section>
+
+    <noscript>请启用 JavaScript 查看成本图表。</noscript>
+  </main>
+</body>
+</html>

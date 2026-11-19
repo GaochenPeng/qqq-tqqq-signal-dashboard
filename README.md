@@ -117,6 +117,46 @@ Open:
 http://127.0.0.1:8765
 ```
 
+### China-listed ETF analysis
+
+The home-page **China ETF analysis** link opens `/cn-etf.html`. **刷新行情** requests a new batch of last prices, IOPV and asks from Tencent for the 12 Nasdaq-100 ETFs. The page displays the quote timestamp and labels the last valid snapshot when the source is unavailable.
+
+The RMB backtest uses adjusted daily opens and closes from Eastmoney. It starts with CNY 1,000,000 and preselects 159660, 513110, 159941 and 513290. There are 13 selectable funds. Compare a lump sum, 12 monthly installments and the existing unleveraged signal policy with execution on the eligible Chinese session after the U.S. signal. The page shows the actual dates, scope and assumptions used.
+
+Use the backtest view selector to switch between the selected portfolio and each ETF, with CNY 1,000,000 in each independent run. Buy counts reflect simulated purchases of individual funds. The 1%, 3%, 5% and 8% premium rules are available for 159660, 513110, 159941 and 513290. A rule checks the first eligible opening in each month, uses the unadjusted opening price against official NAV available under the T+3-open convention, then invests that ETF’s remaining allotment in one purchase. Historical intraday IOPV is unavailable in the source used for this comparison.
+
+After the Chinese session closes, update the daily bars with `npm run update:cn-etf-history` and the saved premium inputs with `npm run update:cn-etf-premiums`. Local backtests read the refreshed files on their next request.
+
+### 20-day China ETF forecasts and local data
+
+The **20 日预测** tab shows P10, median, and P90 forecasts of RMB returns for 159660, 513110, 159941, and 513290. The screen keeps the historical comparison alongside each forecast. It selects the lowest average quantile loss across P10, P50, and P90.
+
+The protocol follows the principle of comparing methods on identical windows from the [FinVerse study](https://github.com/LGAI-Research/EXAONE-Forecast/blob/main/domains/finance/README.md). FinVerse additionally tests cross-asset ranking and a top-ranked portfolio, which are separate tasks. Here the target is each selected ETF’s front-adjusted close-to-close return 20 Chinese trading sessions forward. At each origin, both neural candidates see at most 512 daily closes through that date. Three transparent rules use historical returns available at that date. The EWMA rule uses a fixed daily decay of 0.94.
+
+The fixed retrospective run spans 2025-11-18 to 2026-11-16. It contains 12 non-overlapping origins and 48 ETF outcomes, with common market exposure within each origin.
+
+| Candidate | Quantile loss (pp) | Median MAE (pp) | P10–P90 coverage |
+| --- | ---: | ---: | ---: |
+| Chronos-2 | 1.428 | 4.833 | 38/48 |
+| Simons-297M | 1.526 | 4.910 | 36/48 |
+| Historical mean and empirical interval | 1.532 | 5.185 | 25/48 |
+| Flat center and EWMA-scaled interval | 1.536 | 5.225 | 35/48 |
+| Flat center and empirical interval | 1.620 | 5.225 | 29/48 |
+
+This prototype selects Chronos-2 on the retrospective score. P10–P90 is the model's nominal interval. Its empirical coverage and the forecast's origin, generation time, underlying data fingerprint, and checkpoint revision are stored for future verification. The retrospective run cannot establish whether a pretrained model saw related public financial series. The existing trading rule backtests are separate from these forecasts.
+
+Install JavaScript dependencies with `npm ci`. Supply a private `.env.local` with `ETF_POSTGRES_PASSWORD` and `ETF_DATABASE_URL`. The compose file creates database `nasdaq_etf` with user `nasdaq_etf`, bound to `127.0.0.1:55436` and backed by a Docker named volume.
+
+```bash
+docker compose --env-file .env.local -f compose.etf.yml up -d --wait
+uv sync --project forecast --locked
+uv run --project forecast --locked python forecast/fetch_models.py
+npm run forecast:run
+npm run dev
+```
+
+Update forecasts in the tab or with `npm run forecast:run`. A run refreshes the daily archives, imports front-adjusted OHLC into PostgreSQL, archives the current public IOPV batch, and stores the results. Re-running the same inputs and model revisions reuses the saved record. Market refreshes also archive IOPV observations, including 513290. The quote table starts with observations saved locally from this integration. The live history JSON files, database credentials, database volume, and model weights are local artifacts. `npm run forecast:run -- --from-snapshot --rules-only` uses the existing market archive and the standard Python rules without model weights. The GitHub checkout can regenerate the A-share backtest data through `npm run update:cn-etf-history` and then `npm run update:cn-etf-premiums`.
+
 ## Check
 
 ```bash

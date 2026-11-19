@@ -1,0 +1,20 @@
+name: nasdaq-etf-dashboard
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:55436:5432"
+    environment:
+      POSTGRES_DB: nasdaq_etf
+      POSTGRES_USER: nasdaq_etf
+      POSTGRES_PASSWORD: ${ETF_POSTGRES_PASSWORD:?Set ETF_POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nasdaq_etf -d nasdaq_etf"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+volumes:
+  postgres-data:

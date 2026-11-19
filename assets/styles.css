@@ -84,9 +84,50 @@ button.ghost.active {
 .header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   flex: 0 0 auto;
 }
+
+.etf-entry-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--blue);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--blue);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.2;
+}
+
+.etf-entry-link:hover { background: #eef4ff; }
+
+.etf-entry-link:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.etf-entry-icon {
+  display: inline-flex;
+  align-items: end;
+  gap: 2px;
+  height: 14px;
+}
+
+.etf-entry-icon i {
+  width: 3px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.etf-entry-icon i:nth-child(1) { height: 6px; }
+.etf-entry-icon i:nth-child(2) { height: 10px; }
+.etf-entry-icon i:nth-child(3) { height: 14px; }
 
 h1, h2, p {
   margin: 0;
