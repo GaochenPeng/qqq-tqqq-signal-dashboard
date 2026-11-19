@@ -89,9 +89,16 @@ test("drawdown includes waiting cash and the initial trading cost", () => {
   assert.equal(simulate("signal", sessions, [prices]).finalValue, 1_000_000);
 });
 
+test("backtest rejects invalid or repeated budget parameters before reading market data", () => {
+  for (const budget of ["", "0", "-1", "1.5", "5e5", "Infinity", "90071992547410", ["500000", "500000"]]) {
+    assert.throws(() => cnEtfBacktest({ budget }), { statusCode: 400, message: /初始资金/ });
+  }
+});
+
 test("the default basket and selectable single funds use actual common ETF dates",
   { skip: !hasHistory && "local history snapshot not bootstrapped" }, () => {
   const result = cnEtfBacktest();
+  assert.equal(result.budget, 1_000_000);
   assert.deepEqual(result.selected, ["159660", "513110", "159941", "513290"]);
   assert.equal(result.funds.length, 13);
   assert.equal(result.sessions.at(-1), result.available.end);
@@ -114,7 +121,7 @@ test("premium thresholds check month-opening price against the available NAV and
     [sessions[3], { open: 98, nav: 100, navDate: "2026-02-25", usableDay: "2026-03-02" }],
   ]);
   const control = { codes: ["159660"], points: [observations], limit: 3 };
-  const tested = simulate("premium", sessions, [prices], undefined, control);
+  const tested = simulate("premium", sessions, [prices], { premium: control });
   assert.equal(tested.buyCount, 1);
   assert.equal(tested.purchases[0].date, sessions[2]);
   assert.equal(tested.equity[1], 1_000_000);
@@ -145,4 +152,27 @@ test("portfolio and individual views report separate purchase counts and premium
   assert.equal(mixed.byFund["159660"].premium.strategies.length, 4);
   assert.equal(mixed.byFund["159501"].strategies.length, 3);
   assert.equal(mixed.byFund["159501"].premium.strategies.length, 0);
+});
+
+test("custom budget funds all strategies in both portfolio and individual backtests",
+  { skip: !(hasHistory && hasPremiums) && "local history snapshots not bootstrapped" }, () => {
+  const dates = { start: "2025-11-18", end: "2026-11-18" };
+  const baseline = cnEtfBacktest(dates);
+  const custom = cnEtfBacktest({ ...dates, budget: "500000" });
+  assert.equal(custom.budget, 500_000);
+  for (const code of ["", ...baseline.selected]) {
+    const original = code ? baseline.byFund[code] : baseline;
+    const updated = code ? custom.byFund[code] : custom;
+    const originalStrategies = [...original.strategies, ...original.premium.strategies];
+    const updatedStrategies = [...updated.strategies, ...updated.premium.strategies];
+    assert.equal(updatedStrategies.length, originalStrategies.length);
+    for (const [index, strategy] of updatedStrategies.entries()) {
+      const previous = originalStrategies[index];
+      assert.equal(strategy.buyCount, previous.buyCount);
+      assert.ok(Math.abs(strategy.cash - previous.cash / 2) < 0.01);
+      assert.ok(Math.abs(strategy.maxDrawdown - previous.maxDrawdown) < 1e-10);
+      assert.equal(strategy.equity.length, previous.equity.length);
+      assert.ok(strategy.equity.every((value, day) => Math.abs(value - previous.equity[day] / 2) < 0.01));
+    }
+  }
 });

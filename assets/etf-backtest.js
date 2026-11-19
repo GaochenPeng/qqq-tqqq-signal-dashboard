@@ -1,5 +1,8 @@
+import { formatAmounts, getBudget, onBudgetChange } from "./etf-budget.js";
+
 const node = (id) => document.getElementById(id);
 const fundPicker = node("etfBacktestFunds");
+const budgetInput = node("etfBacktestBudget");
 const dateStart = node("etfBacktestStart");
 const dateEnd = node("etfBacktestEnd");
 const run = node("etfRunBacktest");
@@ -22,8 +25,8 @@ const actionLabels = {
   pauseAtHigh: "暂停加仓",
   normalDca: "正常投入",
 };
-const toWan = (value) => (value / 10_000).toFixed(2);
 const percentage = (fraction) => (fraction * 100).toFixed(2) + "%";
+const budgetChanged = "初始资金已修改，运行回测可更新下方结果。";
 let funds = [];
 let shown;
 let active;
@@ -67,7 +70,8 @@ function strategyPresentation(strategy) {
 }
 
 function readout(index) {
-  const values = active.strategies.map((item) => `${strategyPresentation(item).name} ${toWan(item.equity[index])} 万元`);
+  const { unit, format } = formatAmounts(active.budget);
+  const values = active.strategies.map((item) => `${strategyPresentation(item).name} ${format(item.equity[index])} ${unit}`);
   node("etfEquityReadout").textContent = `${active.sessions[index]} · ${values.join(" · ")}`;
 }
 
@@ -82,13 +86,15 @@ function drawChart(selectedDay) {
   ctx.scale(ratio, ratio);
   ctx.font = "12px system-ui";
   const { budget, sessions, strategies } = active;
+  const { format } = formatAmounts(budget);
   const low = Math.min(budget, ...strategies.map((item) => Math.min(...item.equity)));
   const high = Math.max(budget, ...strategies.map((item) => Math.max(...item.equity)));
-  const intervals = 4;
-  const step = Math.max(1_000, Math.ceil((high - low) / intervals / 5_000) * 5_000);
+  const targetStep = Math.max(budget >= 10_000 ? 100 : 1, (high - low) / 4);
+  const magnitude = 10 ** Math.floor(Math.log10(targetStep));
+  const step = Math.ceil(targetStep / magnitude) * magnitude;
   const min = Math.floor(low / step) * step;
   const max = Math.max(min + step, Math.ceil(high / step) * step);
-  const left = 56;
+  const left = Math.max(56, Math.ceil(ctx.measureText(format(max)).width) + 15);
   const right = width - 15;
   const top = 12;
   const bottom = height - 26;
@@ -104,7 +110,7 @@ function drawChart(selectedDay) {
     ctx.stroke();
     ctx.fillStyle = "#475467";
     ctx.textAlign = "right";
-    ctx.fillText((value / 10_000).toFixed(step >= 10_000 ? 0 : 1), left - 8, y(value) + 4);
+    ctx.fillText(format(value), left - 8, y(value) + 4);
   }
   strategies.forEach((strategy) => {
     const { equity } = strategy;
@@ -184,8 +190,10 @@ function renderView() {
   const start = scope.sessions[0];
   const end = scope.sessions.at(-1);
   const mode = code ? "单只" : "等预算组合";
+  const { unit, format } = formatAmounts(shown.budget);
+  node("etfEquityUnit").textContent = `账户资产（${unit}）`;
   node("etfBacktestScope").textContent =
-    `${mode} · ${codes} · ${start} 至 ${end} · ${scope.sessions.length} 个交易日 · 初始 ${toWan(shown.budget)} 万元`;
+    `${mode} · ${codes} · ${start} 至 ${end} · ${scope.sessions.length} 个交易日 · 初始 ${format(shown.budget)} ${unit}`;
 
   node("etfBacktestLegend").replaceChildren(...active.strategies.map((strategy) => {
     const item = document.createElement("li");
@@ -201,11 +209,11 @@ function renderView() {
   node("etfBacktestRows").replaceChildren(...tableStrategies.map((strategy) => {
     const row = dataRow([
       strategyPresentation(strategy).name,
-      `${toWan(strategy.finalValue)} 万元`,
+      `${format(strategy.finalValue)} ${unit}`,
       percentage(strategy.totalReturn),
       percentage(strategy.maxDrawdown),
       String(strategy.buyCount),
-      `${toWan(strategy.cash)} 万元`,
+      `${format(strategy.cash)} ${unit}`,
     ]);
     row.dataset.strategy = strategy.id;
     if (strategy.id === "premium") row.dataset.limit = strategy.limit;
@@ -235,7 +243,7 @@ function renderBacktest(result) {
     ...selectedFunds.map((fund) => option(fund.code, `${fund.code} ${managerLabel(fund)}`)),
   );
   viewControl.value = result.selected.includes(previousScope) ? previousScope : "";
-  status.textContent = "";
+  status.textContent = result.budget === getBudget() ? "" : budgetChanged;
   status.classList.remove("etf-status-error");
   node("etfBacktestResult").hidden = false;
   renderView();
@@ -250,8 +258,8 @@ async function loadBacktest(params) {
   status.classList.remove("etf-status-error");
   status.textContent = "正在计算场内回测…";
   try {
-    const query = params ? `?${new URLSearchParams(params)}` : "";
-    const response = await fetch(`/api/cn-etf-backtest${query}`, {
+    const query = new URLSearchParams({ budget: getBudget(), ...params });
+    const response = await fetch(`/api/cn-etf-backtest?${query}`, {
       cache: "no-store",
       signal: AbortSignal.timeout(8_000),
     });
@@ -274,8 +282,8 @@ async function loadBacktest(params) {
   }
 }
 
-node("etfBacktestForm").addEventListener("change", () => {
-  if (busy) return;
+node("etfBacktestForm").addEventListener("change", (event) => {
+  if (busy || event.target === budgetInput) return;
   const codes = selectedCodes();
   applyDateBounds(codes);
   run.disabled = !codes.length;
@@ -289,6 +297,11 @@ node("etfBacktestForm").addEventListener("submit", (event) => {
     return;
   }
   loadBacktest({ codes: selectedCodes().join(","), start: dateStart.value, end: dateEnd.value });
+});
+onBudgetChange(() => {
+  if (busy || !shown) return;
+  status.textContent = budgetChanged;
+  status.classList.remove("etf-status-error");
 });
 viewControl.addEventListener("change", renderView);
 limitControl.addEventListener("change", renderView);

@@ -38,6 +38,7 @@
           <div id="etfBacktestFunds"></div>
         </fieldset>
         <div class="etf-backtest-controls">
+          <label>初始资金（元） <input id="etfBacktestBudget" class="etf-budget-input" data-etf-budget type="number" inputmode="numeric" value="1000000" min="1" max="90071992547409" step="1" required /></label>
           <label>开始日期 <input id="etfBacktestStart" type="date" required disabled /></label>
           <label>结束日期 <input id="etfBacktestEnd" type="date" required disabled /></label>
           <button id="etfRunBacktest" type="submit" disabled>运行回测</button>
@@ -53,7 +54,7 @@
         <p id="etfBacktestScope" class="etf-status muted"></p>
         <ul id="etfBacktestLegend" class="etf-legend" aria-label="回测策略图例"></ul>
         <div class="etf-equity-wrap">
-          <p class="etf-equity-unit muted">账户资产（万元）</p>
+          <p id="etfEquityUnit" class="etf-equity-unit muted">账户资产（万元）</p>
           <canvas id="etfEquityChart" role="img" aria-label="所选范围的各策略日度账户资产走势"></canvas>
         </div>
         <p id="etfEquityReadout" class="etf-equity-readout muted"></p>
@@ -96,9 +97,9 @@
       </div>
       <details class="etf-backtest-method">
         <summary>回测怎么算</summary>
-        <p class="muted">100 万元期初到位，给所选 ETF 分配相同起始预算。一次投入在首个共同交易日买入。12 笔分批从首月起，在每个月第一个共同交易日投入相同金额。三信号策略每月释放一份预算，沿用项目的无杠杆买卖规则，美股收盘后的信号在下一个可交易的共同开盘执行，同一开盘前有多条信号时使用最新一条。</p>
+        <p class="muted">输入的初始资金在期初到位，给所选 ETF 分配相同起始预算。一次投入在首个共同交易日买入。12 笔分批从首月起，在每个月第一个共同交易日投入相同金额。三信号策略每月释放一份预算，沿用项目的无杠杆买卖规则，美股收盘后的信号在下一个可交易的共同开盘执行，同一开盘前有多条信号时使用最新一条。</p>
         <p class="muted">成交按前复权开盘价模拟，允许小数份额，按共同交易日收盘价计入资产和回撤。交易摩擦每边 0.05%，现金利息按零。场内价格已反映基金费用和历史折溢价。三信号估值使用项目已有的 CAPE 历史近似。</p>
-        <p class="muted">组合用 100 万元等预算持有所选 ETF，单只视图独立用 100 万元回测。买入次数按每只 ETF 实际模拟成交的一笔算，减仓与未成交的信号不计。</p>
+        <p class="muted">组合回测在所选 ETF 之间均分初始资金，每只 ETF 的单独回测使用全部初始资金。买入次数按每只 ETF 实际模拟成交的一笔算，减仓与未成交的信号不计。</p>
         <p class="muted">等低溢价策略在区间内每个月第一个可交易开盘检查。以未复权开盘价和当时可用的历史单位净值估算折溢价，净值按估值日后第三个沪深交易日开盘才可使用。开盘价满足盘前限价时，模拟一次用完该 ETF 的预算。等待期间持有现金。</p>
         <p class="etf-sources">
           <a href="https://quote.eastmoney.com/sz159660.html">东方财富日线</a>
@@ -158,18 +159,21 @@
               <h2 id="etfRankTitle">综合成本排名</h2>
               <p id="etfScope" class="muted"></p>
             </div>
-            <label class="etf-horizon" for="etfYears">
-              持有期
-              <select id="etfYears">
-                <option value="0">仅看入场</option>
-                <option value="1" selected>1 年</option>
-                <option value="2">2 年</option>
-                <option value="3">3 年</option>
-                <option value="5">5 年</option>
-                <option value="8">8 年</option>
-                <option value="10">10 年</option>
-              </select>
-            </label>
+            <div class="etf-backtest-controls">
+              <label>投入金额（元） <input id="etfCostBudget" class="etf-budget-input" data-etf-budget type="number" inputmode="numeric" value="1000000" min="1" max="90071992547409" step="1" required /></label>
+              <label for="etfYears">
+                持有期
+                <select id="etfYears">
+                  <option value="0">仅看入场</option>
+                  <option value="1" selected>1 年</option>
+                  <option value="2">2 年</option>
+                  <option value="3">3 年</option>
+                  <option value="5">5 年</option>
+                  <option value="8">8 年</option>
+                  <option value="10">10 年</option>
+                </select>
+              </label>
+            </div>
           </div>
           <p id="etfQuoteStatus" class="etf-status muted" role="status"></p>
 
@@ -185,7 +189,7 @@
           <div class="etf-chart-grid etf-chart-axis" aria-hidden="true">
             <span></span>
             <div id="etfAxis"></div>
-            <span>万元</span>
+            <span id="etfCostUnit">万元</span>
           </div>
           <ol id="etfChart" class="etf-chart" aria-label="按综合成本从低到高排列"></ol>
         </section>
