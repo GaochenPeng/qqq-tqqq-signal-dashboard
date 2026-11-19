@@ -90,6 +90,21 @@ async function forecastCloses(codes) {
   return funds;
 }
 
+async function syncFactorIndexCloses(indexes) {
+  const db = await forecastPool();
+  const rows = Object.entries(indexes).flatMap(([index, closes]) =>
+    closes.map(([day, close]) => ({ code: index, day, close })));
+  const result = await db.query(`
+    INSERT INTO etf_factor_index_closes (index_code, session_date, close_price)
+    SELECT code, day, close
+      FROM jsonb_to_recordset($1::jsonb) AS bar(code text, day date, close float8)
+    ON CONFLICT (index_code, session_date) DO UPDATE
+      SET close_price = EXCLUDED.close_price
+      WHERE etf_factor_index_closes.close_price IS DISTINCT FROM EXCLUDED.close_price
+  `, [JSON.stringify(rows)]);
+  return result.rowCount;
+}
+
 async function saveForecast(result, fingerprint) {
   const db = await forecastPool();
   const { rows } = await db.query(`
@@ -122,5 +137,5 @@ async function closeForecastStore() {
 
 module.exports = {
   forecastStoreEnabled, syncEtfBars, archiveEtfQuotes, forecastCloses,
-  saveForecast, forecastStatus, closeForecastStore,
+  syncFactorIndexCloses, saveForecast, forecastStatus, closeForecastStore,
 };

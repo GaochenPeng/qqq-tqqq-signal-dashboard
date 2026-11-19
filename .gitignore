@@ -11,3 +11,4 @@ forecast/.models/
 node_modules/
 data/cn-etf-history.json
 data/cn-etf-premium-history.json
+data/cn-etf-factor-indexes.json

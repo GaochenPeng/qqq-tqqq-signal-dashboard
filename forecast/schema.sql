@@ -25,3 +25,10 @@ CREATE TABLE IF NOT EXISTS etf_forecast_runs (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS etf_forecast_runs_input ON etf_forecast_runs (input_sha256);
+
+CREATE TABLE IF NOT EXISTS etf_factor_index_closes (
+  index_code text NOT NULL CHECK (index_code IN ('NDX', 'NBI')),
+  session_date date NOT NULL,
+  close_price double precision NOT NULL CHECK (close_price > 0),
+  PRIMARY KEY (index_code, session_date)
+);

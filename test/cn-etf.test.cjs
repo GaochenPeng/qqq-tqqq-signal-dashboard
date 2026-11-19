@@ -4,9 +4,11 @@ const { existsSync } = require("node:fs");
 const path = require("node:path");
 const hasHistory = existsSync(path.join(__dirname, "../data/cn-etf-history.json"));
 const hasPremiums = existsSync(path.join(__dirname, "../data/cn-etf-premium-history.json"));
+const hasFactorIndexes = existsSync(path.join(__dirname, "../data/cn-etf-factor-indexes.json"));
 const snapshot = require("../data/cn-etf-snapshot.json");
 const { cnEtfMarket, parseQuoteBatch } = require("../api/_cn-etf-market");
 const { buildSignalSchedule, cnEtfBacktest, simulate } = require("../api/_cn-etf-backtest");
+const { factorPolicy, calibrateFactor, planFactorBuys } = require("../api/_cn-etf-factor");
 
 function rawBatch(timestamp, missingIopv = null) {
   return snapshot.funds.map((fund) => {
@@ -175,4 +177,72 @@ test("custom budget funds all strategies in both portfolio and individual backte
       assert.ok(strategy.equity.every((value, day) => Math.abs(value - previous.equity[day] / 2) < 0.01));
     }
   }
+});
+
+test("factor calibration excludes all evaluation-period prices and premium observations", () => {
+  const rows = Array.from({ length: 1200 }, (_, i) => [
+    new Date(Date.UTC(2022, 0, i + 1)).toISOString().slice(0, 10),
+    100 + i + 2 * Math.sin(i),
+  ]);
+  const fund = (changeAfterCutoff) => new Map(rows.map(([date, close]) => [
+    date, { open: (changeAfterCutoff && date > factorPolicy.fitEnd ? 10 : 1) * close, nav: close },
+  ]));
+  const original = calibrateFactor({ NDX: rows }, new Map([["159660", fund(false)]]));
+  const changed = calibrateFactor({ NDX: rows.map(([date, close]) =>
+    [date, date > factorPolicy.fitEnd ? close * 10 : close]) }, new Map([["159660", fund(true)]]));
+  assert.equal(original.groups.NDX.volatilityLimit, changed.groups.NDX.volatilityLimit);
+  assert.ok(original.groups.NDX.volatilityLimit > 0);
+  assert.equal(original.funds["159660"].premiumLimit, 0);
+  assert.equal(original.funds["159660"].premiumLimit, changed.funds["159660"].premiumLimit);
+});
+
+test("pre-open ranking and budget use prior information, and an unfilled limit cannot switch funds at the same open", () => {
+  const date = "2025-02-05";
+  const codes = ["159660", "513110", "159941", "513290"];
+  const premiums = new Map(codes.map((code, i) => [code, new Map([
+    ["2025-02-04", { open: 100 + i, nav: 100 }],
+    [date, { open: i === 0 ? 110 : 99, nav: 100, navDate: "2025-01-23", usableDay: date }],
+  ])]));
+  const calibration = {
+    funds: Object.fromEntries(codes.map((code) => [code, { premiumLimit: 0.03, pairs: [...premiums.get(code)] }])),
+    groups: {
+      NDX: { volatilityLimit: 0.25, states: [
+        { date: "2025-02-04", trend: -0.1, volatility: 0.3 },
+        { date, trend: 0.5, volatility: 0.1 },
+      ] },
+      NBI: { volatilityLimit: 0.3, states: [{ date: "2025-02-04", trend: 0.1, volatility: 0.15 }] },
+    },
+  };
+  const result = planFactorBuys(codes, [date], 1_000_000, 12, calibration, premiums);
+  assert.equal(result.decisions[0].code, "159660");
+  assert.equal(result.decisions[0].signal.date, "2025-02-04");
+  assert.equal(result.decisions[0].proposedAmount, 15_625);
+  assert.equal(result.decisions[0].reason, "aboveLimit");
+  assert.deepEqual([...result.orders.get(date).keys()], [3]);
+  assert.equal(result.decisions[1].reason, "limitMet");
+  assert.equal(result.decisions[1].proposedAmount, 250_000 / 12);
+  assert.deepEqual(planFactorBuys(codes, ["2024-12-31"], 1_000_000, 12, calibration, premiums), { unavailable: "beforeSample" });
+});
+
+test("out-of-sample factor portfolio and individual ETFs reconcile every fill with cash and trading fees",
+  { skip: !(hasHistory && hasPremiums && hasFactorIndexes) && "local ETF history or index closes not bootstrapped" }, () => {
+  const sample = cnEtfBacktest({ sample: "out", end: "2026-11-19" });
+  assert.equal(sample.sessions[0], "2025-01-02");
+  assert.deepEqual(sample.factor.groups.map(({ index, weight }) => [index, weight]), [["NDX", 0.75], ["NBI", 0.25]]);
+  for (const view of [sample, ...Object.values(sample.byFund)]) {
+    const { strategy, decisions } = view.factor;
+    const fills = decisions.filter(({ amount }) => amount > 0);
+    assert.equal(strategy.buyCount, fills.length);
+    assert.equal(strategy.equity.length, view.sessions.length);
+    assert.ok(fills.every((decision) => decision.signal.date < decision.date &&
+      decision.candidates.every((item) => item.date < decision.date) &&
+      decision.navUsableDate <= decision.date && decision.open <= decision.limitPrice + 1e-12));
+    assert.ok(Math.abs(strategy.cash + fills.reduce((total, { amount }) => total + amount, 0) - sample.budget) < 1e-6);
+    assert.ok(Math.abs(strategy.fees - fills.reduce((total, { fee }) => total + fee, 0)) < 1e-6);
+    assert.ok(Math.abs(strategy.investedRatio - (1 - strategy.cash / sample.budget)) < 1e-12);
+    assert.equal(view.strategies[0].investedRatio, 1);
+    assert.ok(Math.abs(view.strategies[1].investedRatio - 1) < 1e-12);
+  }
+  assert.equal(sample.factor.decisions.length, 24);
+  assert.ok(sample.factor.strategy.buyCount > 0);
 });

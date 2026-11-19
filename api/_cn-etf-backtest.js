@@ -11,6 +11,7 @@ const {
   signalMachineClose,
 } = require("./_lib");
 const { fundTerms } = require("./_cn-etf-market");
+const { factorPolicy, readFactorIndexes, calibrateFactor, planFactorBuys } = require("./_cn-etf-factor");
 
 const defaultBudget = 1_000_000;
 const maxBudget = Math.floor(Number.MAX_SAFE_INTEGER / 100);
@@ -125,13 +126,14 @@ function buildSignalSchedule(sessions, nasdaq, states, availableThrough) {
   return schedule;
 }
 
-function simulate(id, sessions, histories, { budget = defaultBudget, schedule, premium } = {}) {
+function simulate(id, sessions, histories, { budget = defaultBudget, schedule, premium, orders } = {}) {
   const allocation = budget / histories.length;
   const perMonth = allocation / installments;
-  let reserve = id === "signal" ? budget : 0;
+  const useReserve = id === "signal" || Boolean(orders);
+  let reserve = useReserve ? budget : 0;
   const positions = histories.map(() => {
     const portfolio = emptyPortfolio(costBps);
-    if (id !== "signal") portfolio.cash = allocation;
+    if (!useReserve) portfolio.cash = allocation;
     return portfolio;
   });
 
@@ -141,6 +143,7 @@ function simulate(id, sessions, histories, { budget = defaultBudget, schedule, p
   let maxDrawdown = 0;
   let buyCount = 0;
   const purchases = [];
+  const orderFills = [];
 
   const equity = sessions.map((date, dayIndex) => {
     const month = date.slice(0, 7);
@@ -151,6 +154,7 @@ function simulate(id, sessions, histories, { budget = defaultBudget, schedule, p
       lastMonth = month;
     }
 
+    const dailyOrders = orders?.get(date);
     let value = 0;
     positions.forEach((portfolio, index) => {
       const { open, close } = histories[index].get(date);
@@ -174,6 +178,15 @@ function simulate(id, sessions, histories, { budget = defaultBudget, schedule, p
           purchases.push({ date, code: premium.codes[index], ...inputs });
         }
       }
+      const order = dailyOrders?.get(index);
+      if (order) {
+        const amount = Math.min(order.amount, reserve);
+        const beforeFees = portfolio.fees;
+        portfolio.cash += amount;
+        reserve -= amount;
+        buyQQQ(portfolio, amount, open);
+        if (portfolio.qqq > beforeShares) orderFills.push({ decisionId: order.decisionId, amount, fee: portfolio.fees - beforeFees });
+      }
       if (portfolio.qqq > beforeShares) buyCount += 1;
       value += portfolio.cash + portfolio.qqq * close;
     });
@@ -185,15 +198,22 @@ function simulate(id, sessions, histories, { budget = defaultBudget, schedule, p
 
   const finalValue = equity.at(-1);
   const cash = positions.reduce((sum, wallet) => sum + wallet.cash, reserve);
-  const result = { id, finalValue, totalReturn: finalValue / budget - 1, maxDrawdown, cash, buyCount, equity };
-  return premium ? { ...result, limit: premium.limit, purchases } : result;
+  const fees = positions.reduce((sum, wallet) => sum + wallet.fees, 0);
+  const investedRatio = id === "signal" ? null : Math.max(0, Math.min(1, 1 - cash / budget));
+  const result = { id, finalValue, totalReturn: finalValue / budget - 1, maxDrawdown, cash, buyCount, fees, investedRatio, equity };
+  if (premium) return { ...result, limit: premium.limit, purchases };
+  if (orders) return { ...result, orderFills };
+  return result;
+}
+
+function monthOpenings(sessions) {
+  return sessions.filter((day, index) => index === 0 || day.slice(0, 7) !== sessions[index - 1].slice(0, 7));
 }
 
 function premiumBacktests(codes, sessions, histories, premiums, budget) {
   const unsupported = codes.filter((code) => !premiums.has(code));
   if (unsupported.length) return { unsupported, observations: 0, checkpoints: 0, strategies: [] };
-  const monthStarts = sessions.filter((day, index) =>
-    index === 0 || day.slice(0, 7) !== sessions[index - 1].slice(0, 7));
+  const monthStarts = monthOpenings(sessions);
   const points = codes.map((code) => premiums.get(code));
   const observations = points.reduce((count, days) =>
     count + monthStarts.filter((day) => days.has(day)).length, 0);
@@ -203,7 +223,20 @@ function premiumBacktests(codes, sessions, histories, premiums, budget) {
   return { unsupported, observations, checkpoints, strategies };
 }
 
-function backtestView(codes, sessions, histories, { premiums, nasdaq, states, signalThrough, budget }) {
+function factorBacktest(codes, sessions, histories, { budget, calibration, premiums }) {
+  const { orders, ...plan } = planFactorBuys(codes, monthOpenings(sessions), budget, installments, calibration, premiums);
+  if (!orders) return plan;
+  const { orderFills, ...strategy } = simulate("factor", sessions, histories, { budget, orders });
+  const byDecision = new Map(orderFills.map(({ decisionId, ...fill }) => [decisionId, fill]));
+  return {
+    ...plan,
+    strategy,
+    decisions: plan.decisions.map((decision, index) => ({ ...decision, ...(byDecision.get(index) ?? { amount: 0, fee: 0 }) })),
+  };
+}
+
+function backtestView(codes, sessions, histories, inputs) {
+  const { premiums, nasdaq, states, signalThrough, budget } = inputs;
   const schedule = buildSignalSchedule(sessions, nasdaq, states, signalThrough);
   const signalActions = {};
   for (const { decision } of schedule.values()) {
@@ -214,11 +247,13 @@ function backtestView(codes, sessions, histories, { premiums, nasdaq, states, si
     signalActions,
     strategies: ["once", "monthly", "signal"].map((id) => simulate(id, sessions, histories, { budget, schedule })),
     premium: premiumBacktests(codes, sessions, histories, premiums, budget),
+    factor: factorBacktest(codes, sessions, histories, inputs),
   };
 }
 
-function cnEtfBacktest({ codes, start, end, budget: budgetQuery } = {}) {
+function cnEtfBacktest({ codes, start, end, sample, budget: budgetQuery } = {}) {
   const budget = queryBudget(budgetQuery);
+  if (sample !== undefined && sample !== "out") throw badRequest("样本范围无效");
   if (codes !== undefined && (typeof codes !== "string" || codes.length > 100)) {
     throw badRequest("请选择有效的场内 ETF");
   }
@@ -229,7 +264,8 @@ function cnEtfBacktest({ codes, start, end, budget: budgetQuery } = {}) {
   const common = Array.from(points[0].keys()).filter((date) => points.every((series) => series.has(date)));
   if (common.length < 2) throw badRequest("所选 ETF 的共同交易日不足");
   const endDate = queryDate(end, "结束日期") ?? common.at(-1);
-  const defaultStart = new Date(Date.parse(endDate) - 365 * 86400_000).toISOString().slice(0, 10);
+  const defaultStart = sample === "out" ? factorPolicy.sampleStart
+    : new Date(Date.parse(endDate) - 365 * 86400_000).toISOString().slice(0, 10);
   const startDate = queryDate(start, "开始日期") ?? (defaultStart < common[0] ? common[0] : defaultStart);
   if (startDate > endDate) throw badRequest("开始日期应早于结束日期");
   const sessions = common.filter((day) => day >= startDate && day <= endDate);
@@ -240,7 +276,9 @@ function cnEtfBacktest({ codes, start, end, budget: budgetQuery } = {}) {
   const capeChrono = capeSeriesForBacktest(capeLatestFirst).reverse();
   const states = buildStates(nasdaq, nasdaq, vix, capeChrono);
   const premiums = loadPremiums();
-  const inputs = { premiums, nasdaq, states, signalThrough, budget };
+  const indexes = sessions[0] >= factorPolicy.sampleStart ? readFactorIndexes() : null;
+  const calibration = indexes ? calibrateFactor(indexes, premiums) : null;
+  const inputs = { premiums, nasdaq, states, signalThrough, budget, calibration };
   const combined = backtestView(selected, sessions, points, inputs);
   const byFund = Object.fromEntries(selected.map((code, index) => {
     if (selected.length === 1) return [code, combined];
@@ -258,6 +296,7 @@ function cnEtfBacktest({ codes, start, end, budget: budgetQuery } = {}) {
     }),
     selected,
     available: { start: common[0], end: common.at(-1) },
+    factorSampleStart: factorPolicy.sampleStart,
     signalThrough,
     ...combined,
     byFund,

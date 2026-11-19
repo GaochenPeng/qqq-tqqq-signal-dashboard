@@ -48,10 +48,17 @@
       <p id="etfBacktestStatus" class="etf-status muted" role="status">正在载入回测…</p>
       <div id="etfBacktestResult" hidden>
         <div class="etf-backtest-controls etf-backtest-views">
+          <label>策略对比
+            <select id="etfStrategySet">
+              <option value="factor">样本外因子对比</option>
+              <option value="all">全部策略</option>
+            </select>
+          </label>
           <label>查看范围 <select id="etfBacktestView"></select></label>
           <label id="etfPremiumChoice" hidden>曲线的溢价门槛 <select id="etfPremiumLimit"></select></label>
         </div>
         <p id="etfBacktestScope" class="etf-status muted"></p>
+        <p id="etfFactorStatus" class="etf-status muted"></p>
         <ul id="etfBacktestLegend" class="etf-legend" aria-label="回测策略图例"></ul>
         <div class="etf-equity-wrap">
           <p id="etfEquityUnit" class="etf-equity-unit muted">账户资产（万元）</p>
@@ -64,15 +71,36 @@
               <tr>
                 <th scope="col">策略</th>
                 <th scope="col">期末资产</th>
-                <th scope="col">累计收益</th>
+                <th scope="col">扣费收益</th>
                 <th scope="col">最大回撤</th>
-                <th scope="col">买入次数</th>
+                <th scope="col">模拟买入次数</th>
+                <th scope="col">资金投入比例</th>
                 <th scope="col">期末现金</th>
               </tr>
             </thead>
             <tbody id="etfBacktestRows"></tbody>
           </table>
         </div>
+        <details id="etfFactorLog" class="etf-backtest-method" open hidden>
+          <summary>每次买入与等待的原因</summary>
+          <p class="muted">区间内前 12 个月，每月在首个共同交易日检查。盘前按上次可用的开盘估算溢价择券，用估值日后第三个沪深交易日起可用的单位净值定限价，开盘满足限价才模拟成交。资金投入比例按累计已成交的含费买入金额除以初始资金。</p>
+          <div class="etf-table-wrap" tabindex="0" role="region" aria-label="因子策略逐笔决策">
+            <table class="etf-table etf-factor-table">
+              <thead>
+                <tr>
+                  <th scope="col">交易日</th>
+                  <th scope="col">指数与 ETF</th>
+                  <th scope="col">开盘前信号</th>
+                  <th scope="col">开盘价 / 限价</th>
+                  <th scope="col">本次额度</th>
+                  <th scope="col">买入金额（含费）</th>
+                  <th scope="col">决定依据</th>
+                </tr>
+              </thead>
+              <tbody id="etfFactorRows"></tbody>
+            </table>
+          </div>
+        </details>
         <p id="etfSignalNotes" class="etf-status muted"></p>
         <p id="etfPremiumNotes" class="etf-status muted"></p>
         <details id="etfPremiumPurchases" class="etf-backtest-method" hidden>
@@ -101,10 +129,13 @@
         <p class="muted">成交按前复权开盘价模拟，允许小数份额，按共同交易日收盘价计入资产和回撤。交易摩擦每边 0.05%，现金利息按零。场内价格已反映基金费用和历史折溢价。三信号估值使用项目已有的 CAPE 历史近似。</p>
         <p class="muted">组合回测在所选 ETF 之间均分初始资金，每只 ETF 的单独回测使用全部初始资金。买入次数按每只 ETF 实际模拟成交的一笔算，减仓与未成交的信号不计。</p>
         <p class="muted">等低溢价策略在区间内每个月第一个可交易开盘检查。以未复权开盘价和当时可用的历史单位净值估算折溢价，净值按估值日后第三个沪深交易日开盘才可使用。开盘价满足盘前限价时，模拟一次用完该 ETF 的预算。等待期间持有现金。</p>
+        <p class="muted">因子策略只用 2023 至 2024 年的数据估计 20 日年化波动率和各 ETF 溢价的第 80 百分位。样本外从 2025 年开始。每组初始预算按 ETF 数量分配，前 12 个月每月计划投入一份。过去 126 个美股交易日的趋势非正、20 日波动高于阈值，各使本月金额减半。未投入金额保留现金，下一月按当月预算重新判断。</p>
         <p class="etf-sources">
           <a href="https://quote.eastmoney.com/sz159660.html">东方财富日线</a>
           <a href="https://fundf10.eastmoney.com/jjjz_159660.html">官方单位净值转载</a>
           <a href="https://www.99fund.com/announcement/zx/upload/2026/20260319/82c0a408e7bf4cdbb24f9ab7137af530.pdf">净值披露规则</a>
+          <a href="https://fred.stlouisfed.org/series/NASDAQ100">纳斯达克 100 收盘值</a>
+          <a href="https://fred.stlouisfed.org/series/NASDAQNBI">纳斯达克生物科技收盘值</a>
         </p>
       </details>
     </section>

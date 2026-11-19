@@ -10,12 +10,15 @@ const canvas = node("etfEquityChart");
 const status = node("etfBacktestStatus");
 const viewControl = node("etfBacktestView");
 const limitControl = node("etfPremiumLimit");
+const strategySet = node("etfStrategySet");
 
 const presentation = {
   once: { name: "一次买入", color: "#1d4ed8" },
   monthly: { name: "12 笔分批", color: "#0f766e" },
   signal: { name: "三信号（无杠杆）", color: "#b45309" },
+  factor: { name: "趋势 · 波动控仓 · 溢价择券", color: "#a21caf" },
 };
+const indexNames = { NDX: "纳指 100", NBI: "纳指生物科技" };
 const actionLabels = {
   bottomAttack: "底部加仓",
   rampTqqq: "低位渐进",
@@ -171,25 +174,96 @@ function renderPurchases(trial) {
   node("etfPremiumNoPurchases").hidden = Boolean(rows.length);
 }
 
+function renderFactorLog(factor, visible) {
+  const info = node("etfFactorStatus");
+  info.hidden = !visible;
+  node("etfFactorLog").hidden = !visible || !factor?.strategy;
+  if (!visible) return;
+  if (!factor?.strategy) {
+    const unavailable = {
+      beforeSample: `因子样本外比较从 ${shown.factorSampleStart} 开始，请调整开始日期。`,
+      unsupported: `当前组合含因子数据未覆盖的 ETF（${factor?.unsupported?.join("、") ?? ""}）。可以切换到已覆盖的单只 ETF。`,
+      missingInputs: "因子所需的历史指数或净值尚未就绪。下方显示同区间的基准策略。",
+    };
+    info.textContent = unavailable[factor?.unavailable] ?? unavailable.missingInputs;
+    return;
+  }
+  const groups = factor.groups.map(({ index, weight }) => `${indexNames[index]} ${Math.round(weight * 100)}%`).join("、");
+  info.textContent =
+    `按 ${factor.policy.fitStart} 至 ${factor.policy.fitEnd} 的数据定阈值 · 组合预算 ${groups} · 溢价用当时可用的单位净值估算`;
+  const { format } = formatAmounts(1);
+  const reasons = {
+    indexUnavailable: "开盘前的指数数据不足，持有现金。",
+    priorPremiumUnavailable: "缺少近期的候选溢价，持有现金。",
+    openingUnavailable: "缺少当时可用的净值或当天开盘价，持有现金。",
+    aboveLimit: "开盘价超过限价，未成交。",
+    limitMet: "开盘价满足限价，模拟成交。",
+  };
+  const rows = factor.decisions.map((decision) => {
+    const { signal, volatilityLimit, code, index, open, limitPrice, amount, proposedAmount } = decision;
+    const signalText = signal ? `趋势 ${percentage(signal.trend)} · 波动 ${percentage(signal.volatility)}` : "—";
+    const row = dataRow([
+      decision.date,
+      code ?? "—",
+      signalText,
+      open === undefined ? "—" : `${open.toFixed(3)} / ${limitPrice.toFixed(4)} 元`,
+      proposedAmount === undefined ? "—" : `${format(proposedAmount)} 元`,
+      `${format(amount)} 元`,
+      reasons[decision.reason],
+    ]);
+    row.dataset.reason = decision.reason;
+    const details = (column, value) => {
+      const text = document.createElement("small");
+      text.textContent = value;
+      row.cells[column].append(text);
+    };
+    details(1, indexNames[index]);
+    if (signal) {
+      const cuts = [];
+      if (decision.trendReduced) cuts.push("趋势非正，额度减半");
+      if (decision.volatilityReduced) cuts.push("波动超阈值，额度减半");
+      details(2, `截至 ${signal.date} · 波动阈值 ${percentage(volatilityLimit)}`);
+      details(6, cuts.length ? cuts.join("。") : "趋势为正、波动在阈值内，使用本组当月额度。");
+    }
+    if (decision.candidates) {
+      const selection = decision.candidates.length > 1 ? "择取前次估算溢价最低的一只" : "本组的候选 ETF";
+      const premiums = decision.candidates.map((candidate) =>
+        `${candidate.code} ${percentage(candidate.premium)}（${candidate.date}）`).join("、");
+      details(6, `${selection}。前次估算 ${premiums}。`);
+    }
+    if (open !== undefined) {
+      details(3, `开盘估算 ${percentage(decision.openingPremium)} · 阈值 ${percentage(decision.premiumLimit)}`);
+      details(6, `用于限价的净值为 ${decision.navDate} 估值，${decision.navUsableDate} 起可用。`);
+    }
+    if (amount > 0) details(5, `含交易摩擦 ${format(decision.fee)} 元`);
+    return row;
+  });
+  node("etfFactorRows").replaceChildren(...rows);
+}
+
 function renderView() {
   const code = viewControl.value;
   const scope = shown.byFund[code] ?? shown;
+  const showFactors = strategySet.value === "factor";
   const previousLimit = Number(limitControl.value || 3);
   const trials = scope.premium.strategies;
   limitControl.replaceChildren(...trials.map(({ limit }) => option(limit, `≤ ${limit}%`)));
   const trial = trials.find(({ limit }) => limit === previousLimit) ?? trials[0];
   if (trial) limitControl.value = String(trial.limit);
-  node("etfPremiumChoice").hidden = !trial;
+  node("etfPremiumChoice").hidden = showFactors || !trial;
+  const factor = scope.factor;
+  const baseStrategies = showFactors ? scope.strategies.filter(({ id }) => id !== "signal") : scope.strategies;
+  const compared = factor?.strategy ? [...baseStrategies, factor.strategy] : baseStrategies;
   active = {
     budget: shown.budget,
     sessions: scope.sessions,
-    strategies: trial ? [...scope.strategies, trial] : scope.strategies,
+    strategies: !showFactors && trial ? [...compared, trial] : compared,
   };
 
   const codes = code || shown.selected.join("、");
   const start = scope.sessions[0];
   const end = scope.sessions.at(-1);
-  const mode = code ? "单只" : "等预算组合";
+  const mode = code ? "单只" : "选中组合";
   const { unit, format } = formatAmounts(shown.budget);
   node("etfEquityUnit").textContent = `账户资产（${unit}）`;
   node("etfBacktestScope").textContent =
@@ -205,7 +279,7 @@ function renderView() {
     item.append(swatch, name);
     return item;
   }));
-  const tableStrategies = [...scope.strategies, ...trials];
+  const tableStrategies = showFactors ? compared : [...compared, ...trials];
   node("etfBacktestRows").replaceChildren(...tableStrategies.map((strategy) => {
     const row = dataRow([
       strategyPresentation(strategy).name,
@@ -213,22 +287,26 @@ function renderView() {
       percentage(strategy.totalReturn),
       percentage(strategy.maxDrawdown),
       String(strategy.buyCount),
+      strategy.investedRatio == null ? "—" : percentage(strategy.investedRatio),
       `${format(strategy.cash)} ${unit}`,
     ]);
     row.dataset.strategy = strategy.id;
     if (strategy.id === "premium") row.dataset.limit = strategy.limit;
-    row.classList.toggle("etf-backtest-active", strategy === trial);
+    row.classList.toggle("etf-backtest-active", strategy === (showFactors ? factor?.strategy : trial));
     return row;
   }));
 
   const actions = Object.entries(scope.signalActions).map(([key, count]) => `${actionLabels[key] ?? key} ${count} 次`);
   const hasActions = actions.length ? actions.join("、") : "本区间无适用信号";
   node("etfSignalNotes").textContent = `信号数据截至 ${shown.signalThrough}。本区间 ${hasActions}。`;
+  node("etfSignalNotes").hidden = showFactors;
   const premium = scope.premium;
   node("etfPremiumNotes").textContent = premium.unsupported.length
     ? `当前范围有 ${premium.unsupported.length} 只缺少历史折溢价。门槛覆盖 159660、513110、159941、513290，可切到单只查看。`
     : `门槛按开盘价和可用官方净值估算，月度检查点覆盖 ${premium.observations}/${premium.checkpoints}。买入次数按模拟成交笔数统计。`;
-  renderPurchases(trial);
+  node("etfPremiumNotes").hidden = showFactors;
+  renderPurchases(showFactors ? null : trial);
+  renderFactorLog(factor, showFactors);
   readout(scope.sessions.length - 1);
   drawChart();
 }
@@ -258,7 +336,7 @@ async function loadBacktest(params) {
   status.classList.remove("etf-status-error");
   status.textContent = "正在计算场内回测…";
   try {
-    const query = new URLSearchParams({ budget: getBudget(), ...params });
+    const query = new URLSearchParams({ budget: getBudget(), ...(params ?? { sample: "out" }) });
     const response = await fetch(`/api/cn-etf-backtest?${query}`, {
       cache: "no-store",
       signal: AbortSignal.timeout(8_000),
@@ -305,6 +383,7 @@ onBudgetChange(() => {
 });
 viewControl.addEventListener("change", renderView);
 limitControl.addEventListener("change", renderView);
+strategySet.addEventListener("change", renderView);
 new ResizeObserver(() => drawChart()).observe(canvas);
 canvas.addEventListener("pointermove", (event) => {
   if (!plot) return;

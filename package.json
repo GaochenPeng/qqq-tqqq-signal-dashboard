@@ -12,6 +12,7 @@
     "update-data": "node scripts/update-data.cjs",
     "update:cn-etf-history": "node scripts/update-cn-etf-history.cjs",
     "update:cn-etf-premiums": "node scripts/update-cn-etf-premiums.cjs",
+    "update:cn-etf-factors": "node scripts/update-cn-etf-factors.cjs",
     "forecast:run": "node scripts/run-cn-etf-forecast.cjs"
   },
   "engines": {

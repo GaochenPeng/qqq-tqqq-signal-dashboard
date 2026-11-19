@@ -127,6 +127,14 @@ Use the backtest view selector to switch between the selected portfolio and each
 
 After the Chinese session closes, update the daily bars with `npm run update:cn-etf-history` and the saved premium inputs with `npm run update:cn-etf-premiums`. Local backtests read the refreshed files on their next request.
 
+#### Out-of-sample ETF factor comparison
+
+The default comparison starts in 2025 and uses the same dates, RMB budget, adjusted ETF prices and 5 bp trading friction for the lump sum, monthly installments and factor strategy. The four-fund factor portfolio assigns 75% of scheduled capital to Nasdaq-100 and 25% to Nasdaq Biotechnology. The standalone view applies the same rule to the selected fund with the full input budget.
+
+The first common session in each of the first 12 months is an opportunity to spend one tranche per index. A nonpositive 126-session index return and an above-threshold 20-session annualized volatility each halve that group's tranche. Volatility and premium caps are the 80th percentiles of observations available in the 2023–2024 calibration window. At each decision only prior U.S. closes and prior ETF opening-premium estimates are used to rank candidates. The current eligible unit NAV determines the selected fund's limit price. Its unadjusted opening price determines whether the limit order fills. Undeployed amounts stay in cash. The decision log shows the input dates, reasons, comparison prices and gross outlay per fill.
+
+Run `npm run update:cn-etf-factors` to fetch the two official Nasdaq close series (NASDAQ100 and NASDAQNBI) via FRED since 2022 for warm-up. The updater also archives the index closes in local PostgreSQL when configured. The local index snapshot, adjusted ETF daily history and T+3 premium inputs reproduce the evaluation. The historical premium estimate uses the last eligible disclosed NAV. A simulated fill uses fractional shares at the recorded opening price when its limit is met. The existing strategies are available under **全部策略**.
+
 ### 20-day China ETF forecasts and local data
 
 The **20 日预测** tab shows P10, median, and P90 forecasts of RMB returns for 159660, 513110, 159941, and 513290. The screen keeps the historical comparison alongside each forecast. It selects the lowest average quantile loss across P10, P50, and P90.

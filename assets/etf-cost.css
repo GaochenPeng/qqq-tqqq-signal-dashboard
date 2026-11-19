@@ -319,6 +319,17 @@
 .etf-backtest-views { margin-top: 8px; }
 .etf-backtest-active { background: #f5f7ff; }
 
+.etf-factor-table td:last-child {
+  min-width: 15rem;
+  white-space: normal;
+  text-align: left;
+}
+
+.etf-factor-table small {
+  display: block;
+  color: var(--muted);
+}
+
 .etf-forecast-ranges .etf-chart-grid { grid-template-columns: 80px minmax(0, 1fr) minmax(160px, auto); }
 .etf-forecast-range { background: #a4bcff; }
 .etf-forecast-mid { position: absolute; inset-block: 0; width: 2px; background: var(--blue); }
