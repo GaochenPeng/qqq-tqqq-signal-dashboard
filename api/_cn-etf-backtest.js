@@ -12,6 +12,7 @@ const {
 } = require("./_lib");
 const { fundTerms } = require("./_cn-etf-market");
 const { factorPolicy, readFactorIndexes, calibrateFactor, planFactorBuys } = require("./_cn-etf-factor");
+const { fixedBacktests, reserveSignals } = require("./_cn-etf-fixed");
 
 const defaultBudget = 1_000_000;
 const maxBudget = Math.floor(Number.MAX_SAFE_INTEGER / 100);
@@ -54,17 +55,8 @@ function loadHistories() {
   return funds;
 }
 
-function loadPremiums() {
-  let mtimeMs;
-  try {
-    ({ mtimeMs } = fs.statSync(premiumFile));
-  } catch (error) {
-    if (error.code === "ENOENT") return new Map();
-    throw error;
-  }
-  if (premiumCache?.mtimeMs === mtimeMs) return premiumCache.funds;
-  const { funds: raw } = JSON.parse(fs.readFileSync(premiumFile, "utf8"));
-  const funds = new Map(Object.entries(raw).map(([code, rows]) => {
+function premiumPairs(funds = {}) {
+  return new Map(Object.entries(funds).map(([code, rows]) => {
     const points = new Map();
     let latestDay = "";
     for (const [day, open, navDate, nav, usableDay] of rows) {
@@ -79,8 +71,36 @@ function loadPremiums() {
     }
     return [code, points];
   }));
-  premiumCache = { mtimeMs, funds };
-  return funds;
+}
+
+function loadPremiumSnapshot() {
+  let mtimeMs;
+  try {
+    ({ mtimeMs } = fs.statSync(premiumFile));
+  } catch (error) {
+    if (error.code === "ENOENT") return { funds: new Map(), delayed: new Map(), bars: new Map() };
+    throw error;
+  }
+  if (premiumCache?.mtimeMs === mtimeMs) return premiumCache;
+  const { funds, delayedFunds, bars = {} } = JSON.parse(fs.readFileSync(premiumFile, "utf8"));
+  const raw = new Map(Object.entries(bars).map(([code, rows]) => {
+    let previous = "";
+    const prices = new Map(rows.map(([date, open, low]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date <= previous ||
+          !Number.isFinite(open) || !Number.isFinite(low) || low <= 0 || low > open) {
+        throw new Error(`${code} 未复权日线无效 ${date}`);
+      }
+      previous = date;
+      return [date, { open, low }];
+    }));
+    return [code, prices];
+  }));
+  premiumCache = { mtimeMs, funds: premiumPairs(funds), delayed: premiumPairs(delayedFunds), bars: raw };
+  return premiumCache;
+}
+
+function loadPremiums() {
+  return loadPremiumSnapshot().funds;
 }
 
 function badRequest(message) {
@@ -144,6 +164,7 @@ function simulate(id, sessions, histories, { budget = defaultBudget, schedule, p
   let buyCount = 0;
   const purchases = [];
   const orderFills = [];
+  const drawdowns = [];
 
   const equity = sessions.map((date, dayIndex) => {
     const month = date.slice(0, 7);
@@ -192,7 +213,9 @@ function simulate(id, sessions, histories, { budget = defaultBudget, schedule, p
     });
     value += reserve;
     peak = Math.max(peak, value);
-    maxDrawdown = Math.max(maxDrawdown, 1 - value / peak);
+    const drawdown = 1 - value / peak;
+    maxDrawdown = Math.max(maxDrawdown, drawdown);
+    drawdowns.push(-Math.round(drawdown * 1e6) / 1e6);
     return Math.round(value * 100) / 100;
   });
 
@@ -200,7 +223,7 @@ function simulate(id, sessions, histories, { budget = defaultBudget, schedule, p
   const cash = positions.reduce((sum, wallet) => sum + wallet.cash, reserve);
   const fees = positions.reduce((sum, wallet) => sum + wallet.fees, 0);
   const investedRatio = id === "signal" ? null : Math.max(0, Math.min(1, 1 - cash / budget));
-  const result = { id, finalValue, totalReturn: finalValue / budget - 1, maxDrawdown, cash, buyCount, fees, investedRatio, equity };
+  const result = { id, finalValue, totalReturn: finalValue / budget - 1, maxDrawdown, cash, buyCount, fees, investedRatio, equity, drawdowns };
   if (premium) return { ...result, limit: premium.limit, purchases };
   if (orders) return { ...result, orderFills };
   return result;
@@ -248,6 +271,7 @@ function backtestView(codes, sessions, histories, inputs) {
     strategies: ["once", "monthly", "signal"].map((id) => simulate(id, sessions, histories, { budget, schedule })),
     premium: premiumBacktests(codes, sessions, histories, premiums, budget),
     factor: factorBacktest(codes, sessions, histories, inputs),
+    fixed: fixedBacktests(codes, sessions, histories, inputs),
   };
 }
 
@@ -275,10 +299,12 @@ function cnEtfBacktest({ codes, start, end, sample, budget: budgetQuery } = {}) 
   const signalThrough = [nasdaq.at(-1).date, vix.at(-1).date].sort()[0];
   const capeChrono = capeSeriesForBacktest(capeLatestFirst).reverse();
   const states = buildStates(nasdaq, nasdaq, vix, capeChrono);
-  const premiums = loadPremiums();
+  const { funds: premiums, bars: raw, delayed: latePremiums } = loadPremiumSnapshot();
   const indexes = sessions[0] >= factorPolicy.sampleStart ? readFactorIndexes() : null;
   const calibration = indexes ? calibrateFactor(indexes, premiums) : null;
-  const inputs = { premiums, nasdaq, states, signalThrough, budget, calibration };
+  const lateCalibration = indexes && latePremiums.size ? calibrateFactor(indexes, latePremiums) : null;
+  const signals = indexes ? reserveSignals(indexes) : null;
+  const inputs = { premiums, nasdaq, states, signalThrough, budget, calibration, latePremiums, lateCalibration, raw, signals };
   const combined = backtestView(selected, sessions, points, inputs);
   const byFund = Object.fromEntries(selected.map((code, index) => {
     if (selected.length === 1) return [code, combined];

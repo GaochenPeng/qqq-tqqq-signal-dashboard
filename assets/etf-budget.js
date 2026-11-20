@@ -20,12 +20,18 @@ export function formatAmounts(amount) {
 }
 
 for (const input of inputs) {
-  input.addEventListener("change", () => {
-    if (!input.reportValidity()) return;
+  const sync = () => {
+    if (!input.validity.valid) return;
     const amount = input.valueAsNumber;
-    for (const peer of inputs) peer.value = String(amount);
+    for (const peer of inputs) {
+      if (peer !== input) peer.value = String(amount);
+    }
     if (budget === amount) return;
     budget = amount;
     document.dispatchEvent(new Event(changeEvent));
+  };
+  input.addEventListener("input", sync);
+  input.addEventListener("change", () => {
+    if (input.reportValidity()) sync();
   });
 }

@@ -102,7 +102,7 @@
 
     <section id="etfBacktestSection" class="etf-panel" aria-labelledby="etfBacktestTitle">
       <h2 id="etfBacktestTitle">场内 ETF 回测</h2>
-      <p class="muted etf-backtest-intro">用你选的 ETF 在沪深交易所的人民币日线，比较期末资产和最大回撤。</p>
+      <p class="muted etf-backtest-intro">选择 ETF、资金和日期，用沪深市场的人民币日线复算固定策略。</p>
 
       <form id="etfBacktestForm">
         <fieldset class="etf-fund-picker">
@@ -122,19 +122,29 @@
         <div class="etf-backtest-controls etf-backtest-views">
           <label>策略对比
             <select id="etfStrategySet">
-              <option value="factor">样本外因子对比</option>
-              <option value="all">全部策略</option>
+              <option value="entry">买入时机</option>
+              <option value="sizing">趋势和波动控仓</option>
+              <option value="reserve">RSI 和回撤加仓</option>
+              <option value="stress">成交压力测试</option>
+              <option value="delayed">净值延迟测试</option>
+              <option value="factor">现行月初因子</option>
+              <option value="all">三信号与溢价门槛</option>
             </select>
           </label>
           <label>查看范围 <select id="etfBacktestView"></select></label>
           <label id="etfPremiumChoice" hidden>曲线的溢价门槛 <select id="etfPremiumLimit"></select></label>
         </div>
         <p id="etfBacktestScope" class="etf-status muted"></p>
+        <p id="etfFixedStatus" class="etf-status muted" hidden></p>
         <p id="etfFactorStatus" class="etf-status muted"></p>
         <ul id="etfBacktestLegend" class="etf-legend" aria-label="回测策略图例"></ul>
         <div class="etf-equity-wrap">
           <p id="etfEquityUnit" class="etf-equity-unit muted">账户资产（万元）</p>
           <canvas id="etfEquityChart" role="img" aria-label="所选范围的各策略日度账户资产走势"></canvas>
+        </div>
+        <div class="etf-equity-wrap">
+          <p class="etf-equity-unit muted">账户回撤（%）</p>
+          <canvas id="etfDrawdownChart" role="img" aria-label="所选范围的各策略日度账户回撤走势"></canvas>
         </div>
         <p id="etfEquityReadout" class="etf-equity-readout muted"></p>
         <div class="etf-table-wrap" tabindex="0" role="region" aria-label="场内回测结果">
@@ -153,6 +163,47 @@
             <tbody id="etfBacktestRows"></tbody>
           </table>
         </div>
+        <details id="etfFixedMatched" class="etf-backtest-method" hidden>
+          <summary>同等投入对照</summary>
+          <p class="muted">按事后已投入金额做归因。控仓对照把总额均摊到每月。加仓对照把额外金额均摊到已有的 80% 分批成交。</p>
+          <div class="etf-table-wrap" tabindex="0" role="region" aria-label="同等投入对照">
+            <table class="etf-table">
+              <thead>
+                <tr>
+                  <th scope="col">策略</th>
+                  <th scope="col">投入比例</th>
+                  <th scope="col">策略收益</th>
+                  <th scope="col">对照收益</th>
+                  <th scope="col">策略回撤</th>
+                  <th scope="col">对照回撤</th>
+                </tr>
+              </thead>
+              <tbody id="etfFixedMatchedRows"></tbody>
+            </table>
+          </div>
+        </details>
+        <details id="etfFixedLog" class="etf-backtest-method" hidden>
+          <summary>逐笔模拟买入</summary>
+          <div class="etf-backtest-controls etf-backtest-views">
+            <label>成交策略 <select id="etfFixedOrderStrategy"></select></label>
+          </div>
+          <p id="etfFixedOrderCount" class="muted" role="status"></p>
+          <div id="etfFixedOrdersWrap" class="etf-table-wrap" tabindex="0" role="region" aria-label="固定策略成交明细">
+            <table class="etf-table etf-factor-table">
+              <thead>
+                <tr>
+                  <th scope="col">交易日</th>
+                  <th scope="col">ETF</th>
+                  <th scope="col">成交价 / 限价</th>
+                  <th scope="col">成交份额</th>
+                  <th scope="col">金额（含费）</th>
+                  <th scope="col">买入原因</th>
+                </tr>
+              </thead>
+              <tbody id="etfFixedOrderRows"></tbody>
+            </table>
+          </div>
+        </details>
         <details id="etfFactorLog" class="etf-backtest-method" open hidden>
           <summary>每次买入与等待的原因</summary>
           <p class="muted">区间内前 12 个月，每月在首个共同交易日检查。盘前按上次可用的开盘估算溢价择券，用估值日后第三个沪深交易日起可用的单位净值定限价，开盘满足限价才模拟成交。资金投入比例按累计已成交的含费买入金额除以初始资金。</p>
@@ -197,8 +248,10 @@
       </div>
       <details class="etf-backtest-method">
         <summary>回测怎么算</summary>
+        <p class="muted">固定策略自 2025 年起评估。月内限价允许在前 12 个自然月内逐日等待开盘，每个指数每月最多使用一份分批额度。限价用 2023 至 2024 年的溢价第 80 百分位和当时可用净值计算。净值可用日以估值日后第 3 个沪深交易日估算，延迟测试改用第 5 个交易日并重新定阈值。</p>
+        <p class="muted">固定策略按未复权成交价和每手 100 份模拟，按前复权收盘价估值。盘中限价由盘前确定，日内最低价至少穿过限价 0.001 元才估算盘中成交。压力测试改为 0.003 元和单边 0.10% 交易摩擦。日线无法确认排队和实际成交。逐日回撤表示账户资产距此前最高点的跌幅，期初本金和持有现金一并计入。</p>
         <p class="muted">输入的初始资金在期初到位，给所选 ETF 分配相同起始预算。一次投入在首个共同交易日买入。12 笔分批从首月起，在每个月第一个共同交易日投入相同金额。三信号策略每月释放一份预算，沿用项目的无杠杆买卖规则，美股收盘后的信号在下一个可交易的共同开盘执行，同一开盘前有多条信号时使用最新一条。</p>
-        <p class="muted">成交按前复权开盘价模拟，允许小数份额，按共同交易日收盘价计入资产和回撤。交易摩擦每边 0.05%，现金利息按零。场内价格已反映基金费用和历史折溢价。三信号估值使用项目已有的 CAPE 历史近似。</p>
+        <p class="muted">现行月初因子、三信号和原有溢价门槛按前复权开盘价模拟，允许小数份额。交易摩擦默认单边 0.05%，现金利息按零。场内价格已反映基金费用和历史折溢价。三信号估值使用项目已有的 CAPE 历史近似。</p>
         <p class="muted">组合回测在所选 ETF 之间均分初始资金，每只 ETF 的单独回测使用全部初始资金。买入次数按每只 ETF 实际模拟成交的一笔算，减仓与未成交的信号不计。</p>
         <p class="muted">等低溢价策略在区间内每个月第一个可交易开盘检查。以未复权开盘价和当时可用的历史单位净值估算折溢价，净值按估值日后第三个沪深交易日开盘才可使用。开盘价满足盘前限价时，模拟一次用完该 ETF 的预算。等待期间持有现金。</p>
         <p class="muted">因子策略只用 2023 至 2024 年的数据估计 20 日年化波动率和各 ETF 溢价的第 80 百分位。样本外从 2025 年开始。每组初始预算按 ETF 数量分配，前 12 个月每月计划投入一份。过去 126 个美股交易日的趋势非正、20 日波动高于阈值，各使本月金额减半。未投入金额保留现金，下一月按当月预算重新判断。</p>

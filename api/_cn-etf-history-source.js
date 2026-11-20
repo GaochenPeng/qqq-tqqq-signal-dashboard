@@ -1,5 +1,6 @@
 const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
 const usableAfterSessions = 3;
+const delayedNavSessions = 5;
 
 async function get(url, headers) {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
@@ -7,7 +8,7 @@ async function get(url, headers) {
   return response;
 }
 
-async function unadjustedBars(secid, from, through) {
+async function unadjustedOpenLows(secid, from, through) {
   const url = new URL("https://push2his.eastmoney.com/api/qt/stock/kline/get");
   url.search = new URLSearchParams({
     secid,
@@ -27,17 +28,24 @@ async function unadjustedBars(secid, from, through) {
   const rows = new Map();
   let previous = "";
   for (const line of data.klines) {
-    const [date, rawOpen, , , , rawVolume] = line.split(",");
+    const [date, rawOpen, , , rawLow, rawVolume] = line.split(",");
     const open = Number(rawOpen);
+    const low = Number(rawLow);
     const volume = Number(rawVolume);
     if (!dayPattern.test(date) || date <= previous || date > through ||
-        !Number.isFinite(open) || open <= 0 || !Number.isFinite(volume) || volume < 0) {
+        !Number.isFinite(open) || open <= 0 || !Number.isFinite(volume) || volume < 0 ||
+        (volume > 0 && (!Number.isFinite(low) || low <= 0 || low > open))) {
       throw new Error(`${secid} 历史日线无效 ${date}`);
     }
     previous = date;
-    if (volume > 0) rows.set(date, open);
+    if (volume > 0) rows.set(date, { open, low });
   }
   return rows;
+}
+
+async function unadjustedBars(secid, from, through) {
+  const rows = await unadjustedOpenLows(secid, from, through);
+  return new Map(Array.from(rows, ([day, { open }]) => [day, open]));
 }
 
 async function disclosedNav(code) {
@@ -59,13 +67,13 @@ async function disclosedNav(code) {
   });
 }
 
-function pairInputs(sessions, openingPrices, netValues, calendar) {
+function pairInputs(sessions, openingPrices, netValues, calendar, delay = usableAfterSessions) {
   const indexOf = new Map(calendar.map((date, index) => [date, index]));
   let calendarIndex = 0;
   const available = [];
   for (const row of netValues) {
     while (calendarIndex < calendar.length && calendar[calendarIndex] < row.date) calendarIndex += 1;
-    const usableDay = calendar[calendarIndex + usableAfterSessions];
+    const usableDay = calendar[calendarIndex + delay];
     if (!usableDay) break;
     available.push({ ...row, usableDay });
   }
@@ -152,4 +160,5 @@ async function nasdaqIndexCloses(symbol, from, through) {
   return points;
 }
 
-module.exports = { unadjustedBars, disclosedNav, pairInputs, usableAfterSessions, series, fredIndexCloses, nasdaqIndexCloses };
+module.exports = { unadjustedBars, unadjustedOpenLows, disclosedNav, pairInputs, usableAfterSessions,
+  delayedNavSessions, series, fredIndexCloses, nasdaqIndexCloses };

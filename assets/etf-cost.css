@@ -321,11 +321,21 @@
 
 .etf-equity-unit { margin: 0 12px; font-size: 12px; }
 
-#etfEquityChart {
+#etfEquityChart,
+#etfDrawdownChart {
   display: block;
   width: 100%;
+}
+
+#etfEquityChart {
   height: 258px;
 }
+
+#etfDrawdownChart {
+  height: 190px;
+}
+
+#etfBacktestResult .etf-equity-wrap + .etf-equity-wrap { margin-top: 10px; }
 
 .etf-equity-readout { min-height: 23px; margin-top: 7px; }
 

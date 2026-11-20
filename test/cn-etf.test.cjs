@@ -9,6 +9,8 @@ const snapshot = require("../data/cn-etf-snapshot.json");
 const { cnEtfMarket, parseQuoteBatch } = require("../api/_cn-etf-market");
 const { buildSignalSchedule, cnEtfBacktest, simulate } = require("../api/_cn-etf-backtest");
 const { factorPolicy, calibrateFactor, planFactorBuys } = require("../api/_cn-etf-factor");
+const { fixedBacktests } = require("../api/_cn-etf-fixed");
+const { pairInputs } = require("../api/_cn-etf-history-source");
 const { todayDecision } = require("../api/_cn-etf-today");
 
 function rawBatch(timestamp, missingIopv = null) {
@@ -86,10 +88,70 @@ test("drawdown includes waiting cash and the initial trading cost", () => {
   const once = simulate("once", sessions, [prices]);
   assert.equal(once.finalValue, 499750.12);
   assert.ok(Math.abs(once.maxDrawdown - (1 - 0.5 / 1.0005)) < 1e-8);
+  assert.deepEqual(once.drawdowns, [-0.0005, -0.50025]);
   const monthly = simulate("monthly", sessions, [prices]);
   assert.ok(monthly.finalValue > 950_000);
   assert.ok(monthly.maxDrawdown < 0.05);
   assert.equal(simulate("signal", sessions, [prices]).finalValue, 1_000_000);
+});
+
+test("fixed replays preselect the fund, enforce whole lots and distinguish opening and intraday limits", () => {
+  const codes = ["159660", "513110"];
+  const sessions = ["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"];
+  const raw = new Map([
+    [codes[0], new Map(sessions.map((day, i) => [day, { open: i === 0 ? 1.06 : 1.04, low: i === 0 ? 1.049 : 1.019 }]))],
+    [codes[1], new Map(sessions.map((day) => [day, { open: 1.03, low: 1.025 }]))],
+  ]);
+  const histories = codes.map((code) => new Map(sessions.map((day, i) =>
+    [day, { open: raw.get(code).get(day).open, close: i === 2 ? 0.90 : 1.06 }])));
+  const premiums = new Map(codes.map((code, i) => [code, new Map([
+    ["2024-12-31", { open: 1 + i * 0.02, nav: 1 }],
+    ...sessions.map((day) => [day, { open: raw.get(code).get(day).open, nav: 1,
+      navDate: "2024-12-24", usableDay: "2024-12-27" }]),
+  ])]));
+  const calibration = {
+    funds: Object.fromEntries(codes.map((code) => [code, { premiumLimit: 0.05, pairs: [...premiums.get(code)] }])),
+    groups: { NDX: { volatilityLimit: 0.25, states: [
+      { date: "2024-12-31", trend: 0.02, volatility: 0.2 },
+      { date: "2025-01-02", trend: -0.02, volatility: 0.4 },
+    ] } },
+  };
+  const signals = { NDX: new Map([
+    ["2024-12-31", { rsi: 40, drawdown: -0.09 }],
+    ["2025-01-02", { rsi: 18, drawdown: -0.21 }],
+  ]) };
+  const inputs = { raw, premiums, calibration, signals, budget: 1_000_000 };
+  const { strategies, matched } = fixedBacktests(codes, sessions, histories, inputs);
+  assert.equal(strategies.firstOpen.buyCount, 0);
+  const signature = (id) => strategies[id].fills.map(({ date, code, execution }) => [date, code, execution]);
+  assert.deepEqual(signature("resting"), [["2025-01-02", "159660", "intraday"]]);
+  assert.deepEqual(signature("anyOpen"), [["2025-01-03", "513110", "open"]]);
+  assert.deepEqual(signature("restingStrict"), signature("anyOpen"));
+  assert.deepEqual(strategies.reserveRsi.fills[0].tiers, [30, 20]);
+  assert.deepEqual(strategies.reserveDrawdown.fills[0].tiers, [-0.12, -0.20]);
+  assert.equal(strategies.reserveRsi.buyCount, 1);
+  assert.equal(strategies.reserveRsi.fills[0].signalDate, "2025-01-02");
+  assert.ok(strategies.trendVol.fills[0].amount < strategies.anyOpen.fills[0].amount / 3);
+  assert.ok(Math.abs(matched.reserveRsi.investedRatio - strategies.reserveRsi.investedRatio) < 1e-10);
+  for (const strategy of Object.values(strategies)) {
+    assert.equal(strategy.equity.length, sessions.length);
+    assert.equal(strategy.drawdowns.length, sessions.length);
+    assert.ok(Math.abs(Math.min(...strategy.drawdowns) + strategy.maxDrawdown) < 1e-6);
+    assert.ok(strategy.fills.every((fill) => fill.size % 100 === 0));
+    assert.ok(Math.abs(strategy.cash + strategy.fills.reduce((sum, fill) => sum + fill.amount, 0) - inputs.budget) < 1e-8);
+  }
+  const tooSmall = fixedBacktests(codes, sessions, histories, { ...inputs, budget: 1 });
+  assert.equal(tooSmall.strategies.reserveRsi.buyCount, 0);
+  assert.equal(tooSmall.strategies.reserveRsi.cash, 1);
+  assert.deepEqual(fixedBacktests(codes, sessions, histories, { ...inputs, raw: new Map() }), { unavailable: "missingBars" });
+});
+
+test("late NAV sensitivity shifts availability using exchange sessions", () => {
+  const calendar = ["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09"];
+  const opens = new Map(calendar.map((day) => [day, 1]));
+  const nav = [{ date: calendar[0], nav: 1, action: false }];
+  assert.equal(pairInputs(opens, opens, nav, calendar)[0][0], "2025-01-07");
+  assert.deepEqual(pairInputs(opens, opens, nav, calendar, 5), [["2025-01-09", 1, "2025-01-02", 1, "2025-01-09"]]);
 });
 
 test("backtest rejects invalid or repeated budget parameters before reading market data", () => {
