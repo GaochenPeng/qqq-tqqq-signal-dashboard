@@ -135,6 +135,14 @@ The first common session in each of the first 12 months is an opportunity to spe
 
 Run `npm run update:cn-etf-factors` to fetch the two official Nasdaq close series (NASDAQ100 and NASDAQNBI) via FRED since 2022 for warm-up. The updater also archives the index closes in local PostgreSQL when configured. The local index snapshot, adjusted ETF daily history and T+3 premium inputs reproduce the evaluation. The historical premium estimate uses the last eligible disclosed NAV. A simulated fill uses fractional shares at the recorded opening price when its limit is met. The existing strategies are available under **全部策略**.
 
+#### Today's ETF decision and investment plan
+
+Open **今日加仓** on the local dashboard. It uses the latest completed Nasdaq closes, the four Tencent quotes, recent opening prices and the latest eligible disclosed NAV. It shows a calculation for the entered amount starting at CNY 1,000,000. The existing monthly opening rule determines if a candidate is eligible. An eligible amount is further limited by the current sell book and estimated in 100-share lots with the same 5 bp cost assumption. The quote table shows IOPV premiums alongside the separate NAV basis used for the strategy limit.
+
+Save a start month and budget to continue the same 12-month plan. Enter existing and future trades using the actual dates, shares and broker cash amounts. Recorded buys reduce the month's index allocation and the total plan budget. Recorded sells update the holdings. The start month, budget and rule version are preserved in PostgreSQL. A refresh calculates from the saved state. The browser shows the reason for each size reduction and for each condition that blocks an order.
+
+The plan and trade endpoints are exposed by the loopback development server. They use the existing `.env.local` database connection. The first local request creates the two plan tables if needed.
+
 ### 20-day China ETF forecasts and local data
 
 The **20 日预测** tab shows P10, median, and P90 forecasts of RMB returns for 159660, 513110, 159941, and 513290. The screen keeps the historical comparison alongside each forecast. It selects the lowest average quantile loss across P10, P50, and P90.

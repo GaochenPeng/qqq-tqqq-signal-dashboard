@@ -3,37 +3,11 @@ const path = require("node:path");
 const { forecastStoreEnabled, syncFactorIndexCloses, closeForecastStore } = require("../api/_etf-forecast-store");
 
 const destination = path.join(__dirname, "../data/cn-etf-factor-indexes.json");
-const series = { NDX: "NASDAQ100", NBI: "NASDAQNBI" };
-
-async function fetchIndexCloses(seriesId) {
-  const source = new URL("https://fred.stlouisfed.org/graph/fredgraph.csv");
-  source.search = new URLSearchParams({ id: seriesId, cosd: "2022-01-01" });
-  const response = await fetch(source, { headers: { Accept: "text/csv" }, signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`FRED ${seriesId} 返回 HTTP ${response.status}`);
-  const csv = await response.text();
-  const [columns, ...lines] = csv.trim().split(/\r?\n/);
-  if (columns !== `observation_date,${seriesId}` && columns !== `DATE,${seriesId}`) {
-    throw new Error(`FRED ${seriesId} 指数列不完整`);
-  }
-  const rows = [];
-  let previous = "";
-  for (const line of lines) {
-    const [date, raw, extra] = line.split(",");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date <= previous || extra !== undefined) {
-      throw new Error(`FRED 指数日期无效 ${date}`);
-    }
-    previous = date;
-    if (raw === "" || raw === ".") continue;
-    const close = Number(raw);
-    if (!Number.isFinite(close) || close <= 0) throw new Error(`${seriesId} 收盘价无效 ${date}`);
-    rows.push([date, close]);
-  }
-  return rows;
-}
+const { series, fredIndexCloses } = require("../api/_cn-etf-history-source");
 
 async function main() {
   const indexes = Object.fromEntries(await Promise.all(Object.entries(series).map(async ([index, seriesId]) =>
-    [index, await fetchIndexCloses(seriesId)])));
+    [index, await fredIndexCloses(seriesId)])));
   let existing;
   try {
     existing = JSON.parse(await fs.readFile(destination, "utf8")).indexes;

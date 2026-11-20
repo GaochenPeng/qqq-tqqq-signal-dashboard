@@ -11,6 +11,7 @@
   <script type="module" src="/assets/etf-cost.js"></script>
   <script type="module" src="/assets/etf-backtest.js"></script>
   <script type="module" src="/assets/etf-forecast.js"></script>
+  <script type="module" src="/assets/etf-today.js"></script>
 </head>
 <body>
   <main class="shell etf-shell">
@@ -23,10 +24,81 @@
     </header>
 
     <nav class="etf-page-nav" aria-label="场内 ETF 页面">
+      <a href="#etfTodaySection">今日加仓</a>
       <a href="#etfBacktestSection">场内 ETF 回测</a>
       <a href="#etfMarketSection">行情与成本</a>
       <a href="#etfForecastSection">20 日预测</a>
     </nav>
+
+    <section id="etfTodaySection" class="etf-panel" aria-labelledby="etfTodayTitle">
+      <div class="etf-panel-head">
+        <div>
+          <h2 id="etfTodayTitle">今日加仓判断</h2>
+          <p id="etfTodayStatus" class="muted" role="status">正在读取计划和市场数据…</p>
+        </div>
+        <button id="etfTodayRefresh" type="button">更新今日判断</button>
+      </div>
+      <form id="etfPlanForm" class="etf-backtest-controls etf-plan-form">
+        <label>计划本金（元） <input id="etfPlanBudget" class="etf-budget-input" type="number" inputmode="numeric" value="1000000" min="1" max="90071992547409" step="1" required /></label>
+        <label>计划起始月 <input id="etfPlanStart" type="month" required /></label>
+        <button id="etfPlanSave" class="ghost" type="submit" disabled>保存投资计划</button>
+      </form>
+      <p id="etfPlanStatus" class="etf-status muted" aria-live="polite"></p>
+      <dl id="etfPlanSummary" class="etf-plan-summary" hidden>
+        <div><dt>今日可买金额</dt><dd id="etfTodayAmount">—</dd></div>
+        <div><dt>累计已投</dt><dd id="etfPlanUsed">—</dd></div>
+        <div><dt>计划剩余</dt><dd id="etfPlanRemaining">—</dd></div>
+      </dl>
+      <div id="etfTodayGroups" class="etf-today-groups"></div>
+
+      <div id="etfTodayQuotesWrap" class="etf-table-wrap" tabindex="0" role="region" aria-label="四只 ETF 的最新参考溢价" hidden>
+        <table class="etf-table">
+          <thead><tr><th scope="col">ETF</th><th scope="col">最新场内价</th><th scope="col">参考净值</th><th scope="col">盘中溢价</th><th scope="col">报价时间</th></tr></thead>
+          <tbody id="etfTodayQuotes"></tbody>
+        </table>
+      </div>
+      <p class="muted etf-status">每月首个共同交易日检查开盘价。按前次估算溢价择券，使用估值日后三个沪深交易日起可用的单位净值定限价。通过开盘检查后，按当前限价内的卖盘和整手估算买入。</p>
+
+      <div class="etf-plan-holdings">
+        <h3>实际持仓</h3>
+        <p id="etfTradesStatus" class="muted etf-status" role="status">保存计划后可录入已有成交。</p>
+        <div id="etfHoldingsWrap" class="etf-table-wrap" tabindex="0" role="region" aria-label="当前已记录持仓" hidden>
+          <table class="etf-table">
+            <thead><tr><th scope="col">ETF</th><th scope="col">现有份额</th><th scope="col">累计买入</th></tr></thead>
+            <tbody id="etfHoldingsRows"></tbody>
+          </table>
+        </div>
+        <form id="etfTradeForm" class="etf-backtest-controls etf-plan-form" hidden>
+          <label>成交日期 <input id="etfTradeDate" type="date" required /></label>
+          <label>ETF
+            <select id="etfTradeFund">
+              <option value="159660">159660 汇添富</option>
+              <option value="513110">513110 华泰柏瑞</option>
+              <option value="159941">159941 广发</option>
+              <option value="513290">513290 生物科技</option>
+            </select>
+          </label>
+          <label>方向
+            <select id="etfTradeSide">
+              <option value="buy">买入</option>
+              <option value="sell">卖出</option>
+            </select>
+          </label>
+          <label>份额 <input id="etfTradeShares" class="etf-budget-input" type="number" inputmode="numeric" min="1" step="1" required /></label>
+          <label>实际支出或到账（元） <input id="etfTradeAmount" class="etf-budget-input" type="number" inputmode="decimal" min="0.01" step="0.01" required /></label>
+          <button id="etfTradeSave" type="submit">录入实际成交</button>
+        </form>
+        <details id="etfTradeHistory" class="etf-backtest-method" hidden>
+          <summary id="etfTradeCount">已录入成交</summary>
+          <div class="etf-table-wrap" tabindex="0" role="region" aria-label="投资计划成交记录">
+            <table class="etf-table">
+              <thead><tr><th scope="col">成交日期</th><th scope="col">ETF</th><th scope="col">方向</th><th scope="col">份额</th><th scope="col">实际金额</th></tr></thead>
+              <tbody id="etfTradeRows"></tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+    </section>
 
     <section id="etfBacktestSection" class="etf-panel" aria-labelledby="etfBacktestTitle">
       <h2 id="etfBacktestTitle">场内 ETF 回测</h2>

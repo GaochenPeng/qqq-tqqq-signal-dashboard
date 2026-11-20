@@ -33,6 +33,9 @@ const server = http.createServer((req, res) => {
   if (parsed.pathname === "/api/cn-etf-market") return require("./api/cn-etf-market")(req, res);
   if (parsed.pathname === "/api/cn-etf-backtest") return require("./api/cn-etf-backtest")(req, res);
   if (parsed.pathname === "/api/cn-etf-forecast") return require("./api/cn-etf-forecast")(req, res);
+  if (parsed.pathname === "/api/cn-etf-today") return require("./api/_cn-etf-local-handler")(req, res, "today");
+  if (parsed.pathname === "/api/cn-etf-plan") return require("./api/_cn-etf-local-handler")(req, res, "plan");
+  if (parsed.pathname === "/api/cn-etf-trade") return require("./api/_cn-etf-local-handler")(req, res, "trade");
   const requested = parsed.pathname === "/" ? "/index.html" : parsed.pathname;
   let pathname;
   try {

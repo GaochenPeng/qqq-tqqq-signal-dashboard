@@ -9,6 +9,7 @@ const snapshot = require("../data/cn-etf-snapshot.json");
 const { cnEtfMarket, parseQuoteBatch } = require("../api/_cn-etf-market");
 const { buildSignalSchedule, cnEtfBacktest, simulate } = require("../api/_cn-etf-backtest");
 const { factorPolicy, calibrateFactor, planFactorBuys } = require("../api/_cn-etf-factor");
+const { todayDecision } = require("../api/_cn-etf-today");
 
 function rawBatch(timestamp, missingIopv = null) {
   return snapshot.funds.map((fund) => {
@@ -245,4 +246,92 @@ test("out-of-sample factor portfolio and individual ETFs reconcile every fill wi
   }
   assert.equal(sample.factor.decisions.length, 24);
   assert.ok(sample.factor.strategy.buyCount > 0);
+});
+
+function todayFixture() {
+  const date = "2025-01-02";
+  const before = "2024-12-31";
+  const next = "2025-01-03";
+  const codes = ["159660", "513110", "159941", "513290"];
+  const rows = Array.from({ length: 1096 }, (_, i) => [
+    new Date(Date.UTC(2022, 0, i + 1)).toISOString().slice(0, 10), 1_000 + i,
+  ]).filter(([day]) => day <= before);
+  const premiums = new Map(codes.map((code, i) => {
+    const pairs = rows.filter(([day]) => day >= "2023-12-01").map(([day]) =>
+      [day, { open: 1.02 + i * 0.005, nav: 1 }]);
+    pairs.push([date, { open: 1, nav: 1, navDate: "2024-12-26", usableDay: date }]);
+    return [code, new Map(pairs)];
+  }));
+  const quote = (code) => ({
+    code, lastPrice: 1, quoteAt: date + "T10:00:00+08:00", iopv: 0.99,
+    asks: [{ price: 1, lots: 10_000 }],
+  });
+  return {
+    now: new Date(date + "T10:00:01+08:00"),
+    budget: 1_000_000,
+    planState: { enabled: true, plan: null, trades: [] },
+    history: { common: [before, date], calendar: [before, date, next], premiums },
+    indexes: Object.fromEntries(["NDX", "NBI"].map((index) => [index, { rows, source: "test", fresh: true }])),
+    market: { mode: "upstream", funds: codes.slice(0, 3).map(quote), forecastQuote: quote("513290") },
+  };
+}
+
+test("on a valid monthly check the live decision chooses the prior premium leader and fits whole lots", () => {
+  const data = todayDecision(todayFixture());
+  const [ndx, nbi] = data.groups;
+  assert.deepEqual(ndx.reasons, []);
+  assert.deepEqual(nbi.reasons, []);
+  assert.equal(data.preview, true);
+  assert.equal(ndx.decision.code, "159660");
+  assert.equal(ndx.riskBudgetCents, 6_250_000);
+  assert.ok(ndx.shares > 0 && ndx.shares % 100 === 0);
+  assert.ok(ndx.amountCents <= ndx.riskBudgetCents);
+  assert.ok(nbi.amountCents > 0);
+  assert.equal(data.totalCents, ndx.amountCents + nbi.amountCents);
+  assert.equal(data.quotes.length, 4);
+});
+
+test("the saved plan overrides a preview and debits the actual monthly buys across the same index", () => {
+  const fixture = todayFixture();
+  const planState = {
+    enabled: true,
+    plan: { budget: 800_000, startMonth: "2024-12", installments: 12, policyVersion: factorPolicy.version },
+    trades: [
+      { date: "2024-12-03", side: "buy", code: "159941", shares: 1_000, amountCents: 100_000 },
+      { date: "2025-01-02", side: "buy", code: "513110", shares: 30_000, amountCents: 3_000_000 },
+      { date: "2025-01-02", side: "sell", code: "513110", shares: 10_000, amountCents: 1_000_000 },
+    ],
+  };
+  const replay = todayDecision({ ...fixture, planState });
+  assert.equal(replay.planBudget, 800_000);
+  assert.equal(replay.monthIndex, 1);
+  assert.equal(replay.preview, false);
+  assert.equal(replay.holdings["513110"].shares, 20_000);
+  assert.equal(replay.groups[0].boughtThisMonthCents, 3_000_000);
+  assert.equal(replay.groups[0].remainingOrderCents, 2_000_000);
+  assert.equal(replay.remainingCents, 76_900_000);
+  planState.trades[1].amountCents = 5_000_000;
+  const spent = todayDecision({ ...fixture, planState });
+  assert.ok(spent.groups[0].reasons.includes("monthlyBudgetUsed"));
+  assert.equal(spent.groups[0].amountCents, 0);
+  assert.ok(spent.groups[1].amountCents > 0);
+});
+
+test("stale quotes, another session or an opening above the cap each block a live order", () => {
+  const stale = todayFixture();
+  stale.now = new Date("2025-01-02T10:04:00+08:00");
+  const staleResult = todayDecision(stale);
+  assert.equal(staleResult.totalCents, 0);
+  assert.ok(staleResult.groups[0].reasons.includes("quoteUnavailable"));
+
+  const late = todayFixture();
+  late.now = new Date("2025-01-03T10:00:01+08:00");
+  assert.ok(todayDecision(late).groups[0].reasons.includes("afterMonthlyCheck"));
+
+  const premium = todayFixture();
+  premium.history.premiums.get("159660").get("2025-01-02").open = 1.1;
+  const rejected = todayDecision(premium);
+  assert.ok(rejected.groups[0].reasons.includes("aboveLimit"));
+  assert.equal(rejected.groups[0].amountCents, 0);
+  assert.ok(rejected.groups[1].amountCents > 0);
 });

@@ -16,7 +16,7 @@ const { factorPolicy, readFactorIndexes, calibrateFactor, planFactorBuys } = req
 const defaultBudget = 1_000_000;
 const maxBudget = Math.floor(Number.MAX_SAFE_INTEGER / 100);
 const costBps = 5;
-const installments = 12;
+const { installments } = factorPolicy;
 const defaultCodes = ["159660", "513110", "159941", "513290"];
 const catalog = [
   ...fundTerms.map(({ code, manager }) => ({ code, manager, index: "纳斯达克100" })),
@@ -303,4 +303,4 @@ function cnEtfBacktest({ codes, start, end, sample, budget: budgetQuery } = {}) 
   };
 }
 
-module.exports = { cnEtfBacktest, buildSignalSchedule, simulate };
+module.exports = { cnEtfBacktest, buildSignalSchedule, simulate, loadPremiums, queryDate, queryBudget };

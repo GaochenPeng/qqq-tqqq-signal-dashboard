@@ -136,6 +136,6 @@ async function closeForecastStore() {
 }
 
 module.exports = {
-  forecastStoreEnabled, syncEtfBars, archiveEtfQuotes, forecastCloses,
+  forecastStoreEnabled, forecastPool, syncEtfBars, archiveEtfQuotes, forecastCloses,
   syncFactorIndexCloses, saveForecast, forecastStatus, closeForecastStore,
 };

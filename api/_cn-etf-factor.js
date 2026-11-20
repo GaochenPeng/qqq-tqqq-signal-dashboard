@@ -11,6 +11,7 @@ const factorPolicy = Object.freeze({
   volatilityPercentile: 0.8,
   premiumPercentile: 0.8,
   reducedFraction: 0.5,
+  installments: 12,
 });
 const factorGroups = Object.freeze({
   "159660": "NDX",
@@ -196,4 +197,4 @@ function planFactorBuys(codes, dates, budget, installments, calibration, premium
   };
 }
 
-module.exports = { factorPolicy, readFactorIndexes, calibrateFactor, planFactorBuys };
+module.exports = { factorPolicy, factorGroups, readFactorIndexes, calibrateFactor, openingDecision, planFactorBuys };

@@ -211,6 +211,7 @@
 
 .etf-market-toolbar { justify-content: space-between; }
 
+#etfTodaySection,
 #etfBacktestSection,
 #etfForecastSection,
 #etfMarketSection {
@@ -280,6 +281,32 @@
   color: var(--ink);
   background: var(--panel);
 }
+
+.etf-plan-form { margin-top: 14px; }
+.etf-plan-form[hidden], .etf-plan-summary[hidden] { display: none; }
+.etf-plan-form input[readonly] { background: #f5f7fa; color: var(--muted); }
+
+.etf-plan-summary,
+.etf-today-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.etf-plan-summary > div,
+.etf-today-group {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.etf-plan-summary dt, .etf-today-group .muted { font-size: 13px; }
+.etf-plan-summary dd { margin: 3px 0 0; font-size: 20px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.etf-today-group h3, .etf-plan-holdings h3 { font-size: 16px; }
+.etf-today-group p { margin-top: 5px; }
+.etf-today-group ul { margin: 7px 0 0; padding-left: 20px; font-size: 13px; }
+.etf-plan-holdings { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 
 .etf-budget-input {
   width: 9rem;
