@@ -305,7 +305,12 @@
 .etf-plan-summary dd { margin: 3px 0 0; font-size: 20px; font-weight: 750; font-variant-numeric: tabular-nums; }
 .etf-today-group h3, .etf-plan-holdings h3 { font-size: 16px; }
 .etf-today-group p { margin-top: 5px; }
-.etf-today-group ul { margin: 7px 0 0; padding-left: 20px; font-size: 13px; }
+.etf-today-order { font-size: 17px; }
+.etf-today-explanation { line-height: 1.55; }
+.etf-today-target { font-weight: 650; }
+.etf-today-context { margin-top: 10px; color: var(--muted); font-size: 13px; }
+.etf-today-context summary { cursor: pointer; }
+#etfPremiumWhy p, #etfTodayQuoteDetails .etf-table-wrap { margin-top: 8px; }
 .etf-today-quotes td:last-child { min-width: 11rem; white-space: normal; text-align: left; }
 .etf-today-quotes small { display: block; color: var(--muted); }
 .etf-plan-holdings { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }

@@ -84,6 +84,12 @@ function limitAtTick(reference, premium) {
   return Math.floor((reference * (1 + premium) + precision) * 1_000) / 1_000;
 }
 
+function affordableLimit(limit, budgetCents) {
+  if (!limit || !budgetCents) return null;
+  const lotPrice = budgetCents / (lotSize * 100 * (1 + costRate));
+  return Math.min(limit, limitAtTick(lotPrice, 0)) || null;
+}
+
 function inspectFund({
   code, index, quote, marketMode, valuation, fittedPremium, late,
   date, nowMs, remainingMonthCents, smallRemainingCents, groupBlocked,
@@ -111,8 +117,10 @@ function inspectFund({
 
   const small = late && bestAsk && normalLimit !== null && bestAsk > normalLimit + precision;
   const tier = small ? "small" : "normal";
-  const tierLimit = small ? smallLimit : normalLimit;
-  const effectiveLimit = tierLimit === null ? null : Math.min(tierLimit, iopvLimit ?? Infinity);
+  const premiumCap = iopvLimit ?? Infinity;
+  const normalCap = normalLimit === null ? null : Math.min(normalLimit, premiumCap);
+  const smallCap = smallLimit === null ? null : Math.min(smallLimit, premiumCap);
+  const effectiveLimit = small ? smallCap : normalCap;
   const remainingOrderCents = small ? smallRemainingCents : remainingMonthCents;
   if (small && bestAsk <= smallLimit + precision && remainingOrderCents === 0 && remainingMonthCents > 0) {
     reasons.push("smallBudgetUsed");
@@ -123,10 +131,15 @@ function inspectFund({
     order = estimateLots(quote.asks, effectiveLimit, remainingOrderCents);
     if (!order.shares) reasons.push("belowLot");
   }
+  // 目标价根据两档分别计算。价格跌到正常线以内时，额度也会按正常档重新算。
+  const normalBuyAt = affordableLimit(normalCap, remainingMonthCents);
+  const smallBuyAt = affordableLimit(smallCap, smallRemainingCents);
+  const highestBuyPrice = smallBuyAt !== null && smallBuyAt > normalLimit ? smallBuyAt : normalBuyAt;
+  const buyAt = iopv ? highestBuyPrice : null;
   return {
     code, name: quote?.manager ?? "", quoteAt: quote?.quoteAt ?? null, bestAsk, iopv, askPremium,
     nav: valuation?.nav ?? null, navDate: valuation?.navDate ?? null, normalLimit, smallLimit,
-    iopvLimit, effectiveLimit, tier, remainingOrderCents, reasons, ...order,
+    iopvLimit, effectiveLimit, buyAt, tier, remainingOrderCents, reasons, ...order,
   };
 }
 

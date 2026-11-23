@@ -149,6 +149,8 @@ Open **今日加仓** on the local dashboard. In each continuous trading session
 
 Among eligible Nasdaq-100 ETFs, the refresh chooses the lowest sell-side premium. Each order estimate respects both applicable price caps and visible depth, uses 100-share lots and includes 5 bp estimated costs. Missing or stale quotes and closed sessions block suggested orders. The table shows the quote time, IOPV premium, strategy limits and each unmet condition.
 
+The summary explains the displayed decision using each share's current offer, reference value and price difference. The buy-price estimate combines the applicable limits with the remaining allowance for at least one lot, including when the smaller allowance has already been spent. The **8% 怎么来的** disclosure records the January–November 19, 2026 opening replay that informed the cap. That replay used available unit NAV. The additional live IOPV check has a different data basis.
+
 Enter past and future trades with the actual dates, shares and broker cash amounts. Recorded buys by index debit both monthly and total allowances, including the quarter-sized allowance. Recorded sells update holdings. The PostgreSQL migration updates the rule version on existing plans and preserves their capital, start month, installment count and trades.
 
 The plan and trade endpoints are exposed by the loopback development server. They use the existing `.env.local` database connection. The first local request creates the two plan tables if needed.

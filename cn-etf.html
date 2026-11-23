@@ -49,17 +49,26 @@
         <div><dt>累计已投</dt><dd id="etfPlanUsed">—</dd></div>
         <div><dt>计划剩余</dt><dd id="etfPlanRemaining">—</dd></div>
       </dl>
-      <div id="etfTodayGroups" class="etf-today-groups"></div>
+      <div id="etfTodayGroups" class="etf-today-groups" aria-live="polite"></div>
 
-      <div id="etfTodayQuotesWrap" class="etf-table-wrap" tabindex="0" role="region" aria-label="四只 ETF 的买入条件" hidden>
-        <table class="etf-table etf-today-quotes">
-          <thead><tr>
-            <th scope="col">ETF</th><th scope="col">卖一价</th><th scope="col">当日参考净值</th><th scope="col">卖一溢价</th>
-            <th scope="col">策略限价</th><th scope="col">8% 溢价限价</th><th scope="col">报价时间</th><th scope="col">买入条件</th>
-          </tr></thead>
-          <tbody id="etfTodayQuotes"></tbody>
-        </table>
-      </div>
+      <details class="etf-backtest-method" id="etfPremiumWhy" open>
+        <summary>8% 怎么来的</summary>
+        <p>我们想让分批有机会买到，又给多付的钱设上限。拿三只纳指 100 ETF 回放 2026 年 1 月到 11 月 19 日，原限价有 7 个月买到，放到 5% 还是 7 个月。把小笔放宽到 8%，最多用当月额度的四分之一，有成交的月份增到 10 个，最大回撤从 7.62% 上升到 7.88%。</p>
+        <p class="muted">8% 是我们选的最高加价。当天每份资产参考值约 1 元时，最多出 1.08 元。假如资产价值不变、加价消失，付出的 1.08 元就只值约 1 元。历史回放按当时可用的单位净值估算。今天还会用当天的参考值再检查一次，这道检查缺少同口径的历史盘中数据。</p>
+      </details>
+      <details id="etfTodayQuoteDetails" class="etf-backtest-method" hidden>
+        <summary>查看四只 ETF 的报价和限价</summary>
+        <div class="etf-table-wrap" tabindex="0" role="region" aria-label="四只 ETF 的买入条件">
+          <table class="etf-table etf-today-quotes">
+            <thead><tr>
+              <th scope="col">ETF</th><th scope="col">最低卖价</th><th scope="col">当日参考净值</th><th scope="col">卖价溢价</th>
+              <th scope="col">策略限价</th><th scope="col">8% 溢价限价</th><th scope="col">可买参考价</th>
+              <th scope="col">报价时间</th><th scope="col">买入条件</th>
+            </tr></thead>
+            <tbody id="etfTodayQuotes"></tbody>
+          </table>
+        </div>
+      </details>
       <details class="etf-backtest-method">
         <summary>月内分批规则</summary>
         <p class="muted">每个交易日刷新可判定。纳指 100 组前 10 个交易日用各 ETF 历史溢价第 80 百分位定限价。第 11 个交易日起，按策略估算溢价 5% 以内可用本月剩余额度，5% 至 8% 可用月额度的四分之一。纳指生物科技按原历史限价和本组月额度判断。</p>

@@ -390,6 +390,7 @@ test("the saved plan overrides a preview and debits the actual monthly buys acro
   planState.trades[1].amountCents = 5_000_000;
   const spent = todayDecision({ ...fixture, planState });
   assert.ok(spent.groups[0].reasons.includes("monthlyBudgetUsed"));
+  assert.ok(spent.groups[0].candidates.every((item) => item.buyAt === null));
   assert.equal(spent.groups[0].amountCents, 0);
   assert.ok(spent.groups[1].amountCents > 0);
 });
@@ -410,6 +411,7 @@ test("late-month buys honor the small quota, both caps and covered depth", () =>
   const ndx = data.groups[0];
   assert.equal(ndx.decision.tier, "small");
   assert.equal(ndx.decision.effectiveLimit, 1.08);
+  assert.equal(ndx.decision.buyAt, 1.08);
   assert.equal(ndx.shares, 100);
   assert.equal(ndx.smallRemainingCents, 562_500);
   assert.equal(ndx.remainingMonthCents, 5_250_000);
@@ -420,18 +422,50 @@ test("late-month buys honor the small quota, both caps and covered depth", () =>
   const refChanged = todayDecision(fixture).groups[0];
   assert.equal(refChanged.amountCents, 0);
   assert.equal(refChanged.candidates[0].iopvLimit, 1.069);
+  assert.equal(refChanged.candidates[0].buyAt, 1.069);
   assert.deepEqual(refChanged.candidates[0].reasons, ["iopvPremiumAboveLimit"]);
 
   best.iopv = 1;
   fills[0].amountCents = 1_562_500;
   const spent = todayDecision(fixture).groups[0];
   assert.equal(spent.amountCents, 0);
+  assert.equal(spent.candidates[0].buyAt, 1.05);
   assert.deepEqual(spent.candidates[0].reasons, ["smallBudgetUsed"]);
   best.asks[0].price = 1.05;
   const normal = todayDecision(fixture).groups[0];
   assert.equal(normal.decision.tier, "normal");
   assert.equal(normal.decision.remainingOrderCents, 4_687_500);
   assert.ok(normal.amountCents > 0 && normal.amountCents <= 4_687_500);
+});
+
+test("the explained entry price reflects the tier that would apply after the offer falls", () => {
+  const fixture = todayFixture("2025-01-16");
+  fixture.market.funds.slice(1).forEach((quote) => { quote.asks = []; });
+  const quote = setAsk(fixture, "159660", 1.081, 0.97);
+  const unavailable = todayDecision(fixture).groups[0].candidates[0];
+  assert.equal(unavailable.tier, "small");
+  assert.equal(unavailable.buyAt, 1.047);
+  quote.asks[0].price = 1.048;
+  assert.equal(todayDecision(fixture).groups[0].decision, null);
+  quote.asks[0].price = unavailable.buyAt;
+  const reached = todayDecision(fixture).groups[0].decision;
+  assert.equal(reached.tier, "normal");
+  assert.equal(reached.effectiveLimit, unavailable.buyAt);
+  assert.ok(reached.amountCents > 0);
+});
+
+test("the explained entry price also fits one lot after fees", () => {
+  const fixture = todayFixture("2025-01-16");
+  fixture.planState.trades.push({ date: "2025-01-10", code: "159941", side: "buy", shares: 62_000, amountCents: 6_239_500 });
+  fixture.market.funds.slice(1).forEach((quote) => { quote.asks = []; });
+  const quote = setAsk(fixture, "159660", 1.05, 1);
+  const remaining = todayDecision(fixture).groups[0];
+  const at = remaining.candidates[0].buyAt;
+  assert.equal(remaining.remainingMonthCents, 10_500);
+  assert.equal(at, 1.049);
+  assert.deepEqual(remaining.candidates[0].reasons, ["belowLot"]);
+  quote.asks[0].price = at;
+  assert.equal(todayDecision(fixture).groups[0].decision.shares, 100);
 });
 
 test("a failed fund valuation or optional index source leaves other eligible funds usable", () => {
@@ -452,7 +486,8 @@ test("stale quotes, the end of continuous trading and unreadable plan state bloc
   stale.now = new Date("2025-01-03T10:04:00+08:00");
   const staleResult = todayDecision(stale);
   assert.equal(staleResult.totalCents, 0);
-  assert.ok(staleResult.groups[0].candidates.every((item) => item.reasons.includes("quoteUnavailable")));
+  assert.ok(staleResult.groups[0].candidates.every((item) =>
+    item.reasons.includes("quoteUnavailable") && item.buyAt === null));
 
   const nearLunch = todayFixture();
   nearLunch.market.funds[0].quoteAt = "2025-01-03T11:29:55+08:00";

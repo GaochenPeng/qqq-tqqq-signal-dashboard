@@ -15,21 +15,21 @@ const money = (cents) => `${format(cents / 100)} 元`;
 const percent = (ratio) => ratio == null ? "—" : `${(100 * ratio).toFixed(2)}%`;
 const price = (value, digits = 3) => value?.toFixed(digits) ?? "—";
 const reasonLabels = {
-  calendarUnavailable: "沪深交易日历暂不可用",
-  notTradingDate: "今日交易日尚未核实",
-  outsideTradingHours: "当前在沪深连续竞价时段之外",
+  calendarUnavailable: "暂时拿不到交易日历",
+  notTradingDate: "今天暂时没有开市记录",
+  outsideTradingHours: "等沪深市场恢复正常买卖时再刷新",
   planNotStarted: "投资计划尚未到起始月",
   planEnded: "计划分批月份已结束",
-  planUnavailable: "实际计划暂不可读，请刷新",
+  planUnavailable: "暂时读不到你的投资计划和成交记录",
   policyUnavailable: "计划绑定的规则版本暂不可用",
   noEligibleFund: "本组暂无符合条件的 ETF，原因见下表",
-  calibrationUnavailable: "缺少历史溢价阈值",
-  navUnavailable: "暂缺可用单位净值",
-  askAboveLimit: "卖一超过策略限价",
-  iopvPremiumAboveLimit: "卖一溢价超过 8%",
-  quoteUnavailable: "当天最新盘口未核实",
-  iopvUnavailable: "当天参考净值缺失",
-  noAsks: "当前无可买卖盘",
+  calibrationUnavailable: "缺少历史数据，算不出计划限价",
+  navUnavailable: "暂时缺少计算计划限价的净值",
+  askAboveLimit: "卖价高于计划限价",
+  iopvPremiumAboveLimit: "比当天参考值多付超过 8%",
+  quoteUnavailable: "暂时拿不到当天的新报价",
+  iopvUnavailable: "暂时拿不到当天的资产参考值",
+  noAsks: "当前拿不到卖价",
   monthlyBudgetUsed: "本组当月额度已用完",
   smallBudgetUsed: "小笔额度已用完，等待正常限价",
   planBudgetUsed: "计划本金或本组预算已用完",
@@ -113,37 +113,66 @@ function renderGroup(group, preview) {
   card.dataset.index = group.index;
   card.append(el("h3", indexNames[group.index]));
   const check = group.decision;
-  if (group.close) {
-    const sign = group.close.dailyReturn > 0 ? "+" : "";
-    card.append(el("p", `${group.close.date} 收盘 ${format(group.close.value)} · ${sign}${percent(group.close.dailyReturn)} · ${group.close.source}`, "muted"));
-  }
-  if (group.signal) {
-    card.append(el("p", `126 日趋势 ${percent(group.signal.trend)} · 20 日年化波动 ${percent(group.signal.volatility)}`, "muted"));
-  }
-  card.append(el("p", `本月额度 ${money(group.monthlyBudgetCents)} · 已买 ${money(group.boughtThisMonthCents)} · 剩余 ${money(group.remainingMonthCents)}`));
-  if (group.smallBudgetCents !== null) {
-    card.append(el("p", `小笔上限 ${money(group.smallBudgetCents)} · 小笔剩余 ${money(group.smallRemainingCents)}`, "muted"));
-  }
-  if (group.reasons.length) {
-    const reasons = document.createElement("ul");
-    reasons.append(...group.reasons.map((code) => {
-      const item = el("li", reasonLabels[code] ?? code);
-      item.dataset.reason = code;
-      return item;
-    }));
-    card.append(reasons);
-  }
   const outcome = group.amountCents > 0
     ? `${preview ? "试算可买" : "可买"} ${check.code} · 约 ${integer.format(group.shares)} 份 · ${money(group.amountCents)}`
-    : "本组加仓 0 元";
+    : "先等，本次买 0 元";
   const result = document.createElement("p");
   result.append(el("strong", outcome, "etf-today-order"));
-  card.append(result);
-  if (check) {
-    card.dataset.buyable = "true";
-    card.append(el("p", `${check.tier === "small" ? "小笔分批" : "常规分批"} · 本单限价 ${price(check.effectiveLimit)} 元 · 金额含估算费用`, "muted"));
+  card.append(result, renderWhy(group));
+  if (check) card.dataset.buyable = "true";
+
+  const details = document.createElement("details");
+  details.className = "etf-today-context";
+  details.append(el("summary", `本月还可用 ${money(group.remainingMonthCents)}`));
+  details.append(el("p", `本月额度 ${money(group.monthlyBudgetCents)} · 已买 ${money(group.boughtThisMonthCents)}`, "muted"));
+  if (group.smallBudgetCents !== null) {
+    details.append(el("p", `小笔上限 ${money(group.smallBudgetCents)} · 小笔剩余 ${money(group.smallRemainingCents)}`, "muted"));
   }
+  if (group.close) {
+    const sign = group.close.dailyReturn > 0 ? "+" : "";
+    details.append(el("p", `${group.close.date} 收盘 ${format(group.close.value)} · ${sign}${percent(group.close.dailyReturn)} · ${group.close.source}`, "muted"));
+  }
+  if (group.signal) {
+    details.append(el("p", `126 日趋势 ${percent(group.signal.trend)} · 20 日年化波动 ${percent(group.signal.volatility)}`, "muted"));
+  }
+  card.append(details);
   return card;
+}
+
+function renderWhy(group) {
+  const explanation = el("div", "", "etf-today-explanation");
+  const withPrices = group.candidates.filter((item) => item.bestAsk != null && item.iopv != null);
+  const nearest = withPrices.filter((item) => item.buyAt != null)
+    .sort((a, b) => a.bestAsk / a.buyAt - b.bestAsk / b.buyAt)[0];
+  const quote = group.decision ?? nearest ?? withPrices.sort((a, b) => a.askPremium - b.askPremium)[0]
+    ?? group.candidates.find((item) => item.buyAt != null);
+  const block = group.reasons.find((reason) => reason !== "noEligibleFund");
+  const premiumBlocks = quote?.buyAt === quote?.iopvLimit && quote?.reasons.includes("iopvPremiumAboveLimit");
+  const priceReason = premiumBlocks ? "iopvPremiumAboveLimit" : quote?.reasons[0];
+  const reason = block ?? priceReason ?? group.candidates.flatMap((item) => item.reasons)[0];
+  if (!group.decision && reason) explanation.append(el("p", reasonLabels[reason] + "。"));
+
+  if (quote?.bestAsk != null) {
+    const { code, bestAsk, iopv, askPremium } = quote;
+    const difference = bestAsk - iopv;
+    const comparison = askPremium > 0
+      ? `每份多付 ${price(difference, 4)} 元（${percent(askPremium)}）。`
+      : askPremium < 0 ? `每份比参考值低 ${price(-difference, 4)} 元。` : "卖价和参考值相同。";
+    explanation.append(el("p", `${code} 最低卖 ${price(bestAsk)} 元，背后的资产每份参考值约 ${price(iopv, 4)} 元。${comparison}`));
+  }
+  if (group.decision) {
+    const label = quote.tier === "small" ? "小笔" : "常规";
+    explanation.append(el("p", `卖价已到 ${price(quote.effectiveLimit)} 元以内，本月还有额度。这次按${label}分批试算，金额含费用。`));
+  } else if (quote?.buyAt != null) {
+    const gap = quote.bestAsk == null ? 0 : quote.bestAsk - quote.buyAt;
+    const threshold = `${price(quote.buyAt)} 元或更低`;
+    const detail = gap > 1e-10
+      ? `最低卖价降到 ${threshold}，才到买价。现在还差 ${price(gap)} 元/份。`
+      : `最低卖价到 ${threshold}，价格条件就过关。`;
+    const label = quote.bestAsk == null ? quote.code + " " : "";
+    explanation.append(el("p", `按这次参考值，${label}${detail}`, "etf-today-target"));
+  }
+  return explanation;
 }
 
 function renderCandidate(candidate, group) {
@@ -154,7 +183,7 @@ function renderCandidate(candidate, group) {
   const strategyPrice = smallLimit == null ? price(normalLimit) : `${price(normalLimit)} / ${price(smallLimit)}`;
   const row = tableRow([
     [code, name].filter(Boolean).join(" "), price(bestAsk), price(iopv, 4), percent(askPremium), strategyPrice,
-    price(iopvLimit), quoteAt ? quoteClock.format(Date.parse(quoteAt)) : "—", outcome,
+    price(iopvLimit), price(candidate.buyAt), quoteAt ? quoteClock.format(Date.parse(quoteAt)) : "—", outcome,
   ]);
   row.dataset.code = code;
   if (navDate) row.cells[4].append(el("small", `${smallLimit == null ? "" : "正常 / 小笔 · "}${navDate} 净值`));
@@ -174,7 +203,7 @@ function renderDecision(data) {
   at("etfPlanUsed").textContent = data.preview ? "—" : money(data.boughtCents);
   at("etfPlanRemaining").textContent = data.preview ? "—" : money(data.remainingCents);
   at("etfTodayGroups").replaceChildren(...data.groups.map((group) => renderGroup(group, data.preview)));
-  at("etfTodayQuotesWrap").hidden = false;
+  at("etfTodayQuoteDetails").hidden = false;
   at("etfTodayQuotes").replaceChildren(...data.groups.flatMap((group) =>
     group.candidates.map((candidate) => renderCandidate(candidate, group))));
   if (!data.planState.error) {
@@ -187,6 +216,9 @@ function renderDecision(data) {
     expires = setTimeout(() => {
       at("etfTodayAmount").textContent = "待刷新";
       document.querySelectorAll("[data-buyable] .etf-today-order").forEach((value) => { value.textContent = "请刷新确认本组额度"; });
+      document.querySelectorAll("[data-buyable] .etf-today-explanation").forEach((value) => {
+        value.replaceChildren(el("p", "刚才的买价已过时，刷新后再看当前能买多少。"));
+      });
       setStatus("etfTodayStatus", "盘口或竞价时段已变化，请刷新确认当前可买金额。");
     }, Math.max(0, Date.parse(data.orderExpiresAt) - Date.now()));
   }
@@ -210,6 +242,7 @@ async function refreshToday() {
   enableActions();
   at("etfTodayAmount").textContent = "待刷新";
   at("etfTodayGroups").replaceChildren();
+  at("etfTodayQuoteDetails").hidden = true;
   setStatus("etfTodayStatus", "正在核对卖盘、当日参考净值和计划余额…");
   try {
     const data = await requestJson(`/api/cn-etf-today?budget=${budgetInput.valueAsNumber}`, {
