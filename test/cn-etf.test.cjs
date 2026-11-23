@@ -10,8 +10,8 @@ const { cnEtfMarket, parseQuoteBatch } = require("../api/_cn-etf-market");
 const { buildSignalSchedule, cnEtfBacktest, simulate } = require("../api/_cn-etf-backtest");
 const { factorPolicy, calibrateFactor, planFactorBuys } = require("../api/_cn-etf-factor");
 const { fixedBacktests } = require("../api/_cn-etf-fixed");
-const { pairInputs } = require("../api/_cn-etf-history-source");
-const { todayDecision } = require("../api/_cn-etf-today");
+const { pairInputs, usableNavs } = require("../api/_cn-etf-history-source");
+const { monthlyPolicy, todayDecision } = require("../api/_cn-etf-today");
 
 function rawBatch(timestamp, missingIopv = null) {
   return snapshot.funds.map((fund) => {
@@ -152,6 +152,9 @@ test("late NAV sensitivity shifts availability using exchange sessions", () => {
   const nav = [{ date: calendar[0], nav: 1, action: false }];
   assert.equal(pairInputs(opens, opens, nav, calendar)[0][0], "2025-01-07");
   assert.deepEqual(pairInputs(opens, opens, nav, calendar, 5), [["2025-01-09", 1, "2025-01-02", 1, "2025-01-09"]]);
+  assert.deepEqual([...usableNavs([calendar[3]], nav, calendar)], [
+    ["2025-01-07", { nav: 1, navDate: "2025-01-02", usableDay: "2025-01-07" }],
+  ]);
 });
 
 test("backtest rejects invalid or repeated budget parameters before reading market data", () => {
@@ -310,20 +313,18 @@ test("out-of-sample factor portfolio and individual ETFs reconcile every fill wi
   assert.ok(sample.factor.strategy.buyCount > 0);
 });
 
-function todayFixture() {
-  const date = "2025-01-02";
+function todayFixture(date = "2025-01-03") {
   const before = "2024-12-31";
-  const next = "2025-01-03";
   const codes = ["159660", "513110", "159941", "513290"];
   const rows = Array.from({ length: 1096 }, (_, i) => [
     new Date(Date.UTC(2022, 0, i + 1)).toISOString().slice(0, 10), 1_000 + i,
   ]).filter(([day]) => day <= before);
-  const premiums = new Map(codes.map((code, i) => {
-    const pairs = rows.filter(([day]) => day >= "2023-12-01").map(([day]) =>
-      [day, { open: 1.02 + i * 0.005, nav: 1 }]);
-    pairs.push([date, { open: 1, nav: 1, navDate: "2024-12-26", usableDay: date }]);
-    return [code, new Map(pairs)];
-  }));
+  const premiums = new Map(codes.map((code, i) => [code, new Map(rows.filter(([day]) => day >= "2023-12-01")
+    .map(([day]) => [day, { open: 1.02 + i * 0.005, nav: 1 }]))]));
+  const navs = new Map(codes.map((code) => [code, { nav: 1, navDate: "2024-12-26", usableDay: "2025-01-02" }]));
+  const calendar = Array.from({ length: 30 }, (_, i) => new Date(Date.UTC(2025, 0, i + 2)))
+    .filter((day) => day.getUTCDay() !== 0 && day.getUTCDay() !== 6)
+    .map((day) => day.toISOString().slice(0, 10)).filter((day) => day <= date);
   const quote = (code) => ({
     code, lastPrice: 1, quoteAt: date + "T10:00:00+08:00", iopv: 0.99,
     asks: [{ price: 1, lots: 10_000 }],
@@ -332,32 +333,46 @@ function todayFixture() {
     now: new Date(date + "T10:00:01+08:00"),
     budget: 1_000_000,
     planState: { enabled: true, plan: null, trades: [] },
-    history: { common: [before, date], calendar: [before, date, next], premiums },
+    history: { calendar, premiums, navs },
     indexes: Object.fromEntries(["NDX", "NBI"].map((index) => [index, { rows, source: "test", fresh: true }])),
     market: { mode: "upstream", funds: codes.slice(0, 3).map(quote), forecastQuote: quote("513290") },
   };
 }
 
-test("on a valid monthly check the live decision chooses the prior premium leader and fits whole lots", () => {
-  const data = todayDecision(todayFixture());
+function setAsk(fixture, code, ask, iopv) {
+  const quote = fixture.market.funds.find((item) => item.code === code) ?? fixture.market.forecastQuote;
+  quote.iopv = iopv;
+  quote.asks[0].price = ask;
+  return quote;
+}
+
+test("a non-month-start decision selects a passing ETF and explains each failed price guard", () => {
+  const fixture = todayFixture();
+  setAsk(fixture, "159660", 1.02, 0.9);
+  setAsk(fixture, "513110", 1.025, 1.02);
+  setAsk(fixture, "159941", 1.031, 1.02);
+  const data = todayDecision(fixture);
   const [ndx, nbi] = data.groups;
   assert.deepEqual(ndx.reasons, []);
   assert.deepEqual(nbi.reasons, []);
+  assert.equal(data.tradingDay, 2);
   assert.equal(data.preview, true);
-  assert.equal(ndx.decision.code, "159660");
-  assert.equal(ndx.riskBudgetCents, 6_250_000);
+  assert.equal(ndx.decision.code, "513110");
+  assert.equal(ndx.monthlyBudgetCents, 6_250_000);
+  assert.deepEqual(ndx.candidates[0].reasons, ["iopvPremiumAboveLimit"]);
+  assert.deepEqual(ndx.candidates.find(({ code }) => code === "159941").reasons, ["askAboveLimit"]);
   assert.ok(ndx.shares > 0 && ndx.shares % 100 === 0);
-  assert.ok(ndx.amountCents <= ndx.riskBudgetCents);
+  assert.ok(ndx.amountCents <= ndx.monthlyBudgetCents);
   assert.ok(nbi.amountCents > 0);
   assert.equal(data.totalCents, ndx.amountCents + nbi.amountCents);
-  assert.equal(data.quotes.length, 4);
+  assert.equal(data.groups.flatMap((group) => group.candidates).length, 4);
 });
 
 test("the saved plan overrides a preview and debits the actual monthly buys across the same index", () => {
   const fixture = todayFixture();
   const planState = {
     enabled: true,
-    plan: { budget: 800_000, startMonth: "2024-12", installments: 12, policyVersion: factorPolicy.version },
+    plan: { budget: 800_000, startMonth: "2024-12", installments: 12, policyVersion: monthlyPolicy.version },
     trades: [
       { date: "2024-12-03", side: "buy", code: "159941", shares: 1_000, amountCents: 100_000 },
       { date: "2025-01-02", side: "buy", code: "513110", shares: 30_000, amountCents: 3_000_000 },
@@ -370,7 +385,7 @@ test("the saved plan overrides a preview and debits the actual monthly buys acro
   assert.equal(replay.preview, false);
   assert.equal(replay.holdings["513110"].shares, 20_000);
   assert.equal(replay.groups[0].boughtThisMonthCents, 3_000_000);
-  assert.equal(replay.groups[0].remainingOrderCents, 2_000_000);
+  assert.equal(replay.groups[0].remainingMonthCents, 2_000_000);
   assert.equal(replay.remainingCents, 76_900_000);
   planState.trades[1].amountCents = 5_000_000;
   const spent = todayDecision({ ...fixture, planState });
@@ -379,21 +394,74 @@ test("the saved plan overrides a preview and debits the actual monthly buys acro
   assert.ok(spent.groups[1].amountCents > 0);
 });
 
-test("stale quotes, another session or an opening above the cap each block a live order", () => {
+test("late-month buys honor the small quota, both caps and covered depth", () => {
+  const fixture = todayFixture("2025-01-16");
+  fixture.planState.plan = { budget: 1_000_000, startMonth: "2025-01", installments: 12, policyVersion: monthlyPolicy.version };
+  const fills = fixture.planState.trades;
+  fills.push({ date: "2025-01-10", code: "159941", side: "buy", shares: 10_000, amountCents: 1_000_000 });
+  for (const quote of fixture.market.funds) setAsk(fixture, quote.code, 1.08, 1);
+  const best = fixture.market.funds[0];
+  best.asks[0].lots = 1;
+  best.asks.push({ price: 1.081, lots: 10_000 });
+  fixture.market.funds[1].asks = [];
+  fixture.market.funds[2].asks = [];
+  const data = todayDecision(fixture);
+  assert.equal(data.tradingDay, 11);
+  const ndx = data.groups[0];
+  assert.equal(ndx.decision.tier, "small");
+  assert.equal(ndx.decision.effectiveLimit, 1.08);
+  assert.equal(ndx.shares, 100);
+  assert.equal(ndx.smallRemainingCents, 562_500);
+  assert.equal(ndx.remainingMonthCents, 5_250_000);
+  best.asks[0].lots = 10_000;
+  assert.ok(todayDecision(fixture).groups[0].amountCents <= 562_500);
+
+  best.iopv = 0.99;
+  const refChanged = todayDecision(fixture).groups[0];
+  assert.equal(refChanged.amountCents, 0);
+  assert.equal(refChanged.candidates[0].iopvLimit, 1.069);
+  assert.deepEqual(refChanged.candidates[0].reasons, ["iopvPremiumAboveLimit"]);
+
+  best.iopv = 1;
+  fills[0].amountCents = 1_562_500;
+  const spent = todayDecision(fixture).groups[0];
+  assert.equal(spent.amountCents, 0);
+  assert.deepEqual(spent.candidates[0].reasons, ["smallBudgetUsed"]);
+  best.asks[0].price = 1.05;
+  const normal = todayDecision(fixture).groups[0];
+  assert.equal(normal.decision.tier, "normal");
+  assert.equal(normal.decision.remainingOrderCents, 4_687_500);
+  assert.ok(normal.amountCents > 0 && normal.amountCents <= 4_687_500);
+});
+
+test("a failed fund valuation or optional index source leaves other eligible funds usable", () => {
+  const fixture = todayFixture();
+  fixture.history.navs.delete("159660");
+  fixture.indexes = {};
+  setAsk(fixture, "513110", 1.015, 1);
+  setAsk(fixture, "159941", 1.015, 0.99);
+  const [ndx, nbi] = todayDecision(fixture).groups;
+  assert.equal(ndx.decision.code, "513110");
+  assert.equal(ndx.close, null);
+  assert.ok(nbi.amountCents > 0);
+  assert.deepEqual(ndx.candidates[0].reasons, ["navUnavailable"]);
+});
+
+test("stale quotes, the end of continuous trading and unreadable plan state block buy suggestions", () => {
   const stale = todayFixture();
-  stale.now = new Date("2025-01-02T10:04:00+08:00");
+  stale.now = new Date("2025-01-03T10:04:00+08:00");
   const staleResult = todayDecision(stale);
   assert.equal(staleResult.totalCents, 0);
-  assert.ok(staleResult.groups[0].reasons.includes("quoteUnavailable"));
+  assert.ok(staleResult.groups[0].candidates.every((item) => item.reasons.includes("quoteUnavailable")));
 
-  const late = todayFixture();
-  late.now = new Date("2025-01-03T10:00:01+08:00");
-  assert.ok(todayDecision(late).groups[0].reasons.includes("afterMonthlyCheck"));
-
-  const premium = todayFixture();
-  premium.history.premiums.get("159660").get("2025-01-02").open = 1.1;
-  const rejected = todayDecision(premium);
-  assert.ok(rejected.groups[0].reasons.includes("aboveLimit"));
-  assert.equal(rejected.groups[0].amountCents, 0);
-  assert.ok(rejected.groups[1].amountCents > 0);
+  const nearLunch = todayFixture();
+  nearLunch.market.funds[0].quoteAt = "2025-01-03T11:29:55+08:00";
+  nearLunch.now = new Date("2025-01-03T11:29:56+08:00");
+  assert.equal(todayDecision(nearLunch).orderExpiresAt, "2025-01-03T03:30:00.000Z");
+  nearLunch.now = new Date("2025-01-03T11:30:01+08:00");
+  assert.ok(todayDecision(nearLunch).groups[0].reasons.includes("outsideTradingHours"));
+  const planFailure = todayFixture();
+  planFailure.planState.error = "test";
+  assert.equal(todayDecision(planFailure).totalCents, 0);
+  assert.ok(todayDecision(planFailure).groups[0].reasons.includes("planUnavailable"));
 });

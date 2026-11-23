@@ -51,13 +51,20 @@
       </dl>
       <div id="etfTodayGroups" class="etf-today-groups"></div>
 
-      <div id="etfTodayQuotesWrap" class="etf-table-wrap" tabindex="0" role="region" aria-label="四只 ETF 的最新参考溢价" hidden>
-        <table class="etf-table">
-          <thead><tr><th scope="col">ETF</th><th scope="col">最新场内价</th><th scope="col">参考净值</th><th scope="col">盘中溢价</th><th scope="col">报价时间</th></tr></thead>
+      <div id="etfTodayQuotesWrap" class="etf-table-wrap" tabindex="0" role="region" aria-label="四只 ETF 的买入条件" hidden>
+        <table class="etf-table etf-today-quotes">
+          <thead><tr>
+            <th scope="col">ETF</th><th scope="col">卖一价</th><th scope="col">当日参考净值</th><th scope="col">卖一溢价</th>
+            <th scope="col">策略限价</th><th scope="col">8% 溢价限价</th><th scope="col">报价时间</th><th scope="col">买入条件</th>
+          </tr></thead>
           <tbody id="etfTodayQuotes"></tbody>
         </table>
       </div>
-      <p class="muted etf-status">每月首个共同交易日检查开盘价。按前次估算溢价择券，使用估值日后三个沪深交易日起可用的单位净值定限价。通过开盘检查后，按当前限价内的卖盘和整手估算买入。</p>
+      <details class="etf-backtest-method">
+        <summary>月内分批规则</summary>
+        <p class="muted">每个交易日刷新可判定。纳指 100 组前 10 个交易日用各 ETF 历史溢价第 80 百分位定限价。第 11 个交易日起，按策略估算溢价 5% 以内可用本月剩余额度，5% 至 8% 可用月额度的四分之一。纳指生物科技按原历史限价和本组月额度判断。</p>
+        <p class="muted">策略限价基于估值日后三个沪深交易日起可用的单位净值。纳指 100 还按当天参考净值（IOPV）计算卖一溢价，最高 8%。两道限价都过关时，选择卖一溢价最低的合格 ETF，用限价内卖盘按每手 100 份和单边 0.05% 费用试算。减去本月已录入的同组买入，额度按月计算。</p>
+      </details>
 
       <div class="etf-plan-holdings">
         <h3>实际持仓</h3>
@@ -127,7 +134,7 @@
               <option value="reserve">RSI 和回撤加仓</option>
               <option value="stress">成交压力测试</option>
               <option value="delayed">净值延迟测试</option>
-              <option value="factor">现行月初因子</option>
+              <option value="factor">原月初因子</option>
               <option value="all">三信号与溢价门槛</option>
             </select>
           </label>
@@ -251,7 +258,7 @@
         <p class="muted">固定策略自 2025 年起评估。月内限价允许在前 12 个自然月内逐日等待开盘，每个指数每月最多使用一份分批额度。限价用 2023 至 2024 年的溢价第 80 百分位和当时可用净值计算。净值可用日以估值日后第 3 个沪深交易日估算，延迟测试改用第 5 个交易日并重新定阈值。</p>
         <p class="muted">固定策略按未复权成交价和每手 100 份模拟，按前复权收盘价估值。盘中限价由盘前确定，日内最低价至少穿过限价 0.001 元才估算盘中成交。压力测试改为 0.003 元和单边 0.10% 交易摩擦。日线无法确认排队和实际成交。逐日回撤表示账户资产距此前最高点的跌幅，期初本金和持有现金一并计入。</p>
         <p class="muted">输入的初始资金在期初到位，给所选 ETF 分配相同起始预算。一次投入在首个共同交易日买入。12 笔分批从首月起，在每个月第一个共同交易日投入相同金额。三信号策略每月释放一份预算，沿用项目的无杠杆买卖规则，美股收盘后的信号在下一个可交易的共同开盘执行，同一开盘前有多条信号时使用最新一条。</p>
-        <p class="muted">现行月初因子、三信号和原有溢价门槛按前复权开盘价模拟，允许小数份额。交易摩擦默认单边 0.05%，现金利息按零。场内价格已反映基金费用和历史折溢价。三信号估值使用项目已有的 CAPE 历史近似。</p>
+        <p class="muted">原月初因子、三信号和原有溢价门槛按前复权开盘价模拟，允许小数份额。交易摩擦默认单边 0.05%，现金利息按零。场内价格已反映基金费用和历史折溢价。三信号估值使用项目已有的 CAPE 历史近似。</p>
         <p class="muted">组合回测在所选 ETF 之间均分初始资金，每只 ETF 的单独回测使用全部初始资金。买入次数按每只 ETF 实际模拟成交的一笔算，减仓与未成交的信号不计。</p>
         <p class="muted">等低溢价策略在区间内每个月第一个可交易开盘检查。以未复权开盘价和当时可用的历史单位净值估算折溢价，净值按估值日后第三个沪深交易日开盘才可使用。开盘价满足盘前限价时，模拟一次用完该 ETF 的预算。等待期间持有现金。</p>
         <p class="muted">因子策略只用 2023 至 2024 年的数据估计 20 日年化波动率和各 ETF 溢价的第 80 百分位。样本外从 2025 年开始。每组初始预算按 ETF 数量分配，前 12 个月每月计划投入一份。过去 126 个美股交易日的趋势非正、20 日波动高于阈值，各使本月金额减半。未投入金额保留现金，下一月按当月预算重新判断。</p>

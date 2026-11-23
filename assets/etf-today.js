@@ -13,6 +13,28 @@ const quoteClock = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai",
 const indexNames = { NDX: "纳指 100", NBI: "纳指生物科技" };
 const money = (cents) => `${format(cents / 100)} 元`;
 const percent = (ratio) => ratio == null ? "—" : `${(100 * ratio).toFixed(2)}%`;
+const price = (value, digits = 3) => value?.toFixed(digits) ?? "—";
+const reasonLabels = {
+  calendarUnavailable: "沪深交易日历暂不可用",
+  notTradingDate: "今日交易日尚未核实",
+  outsideTradingHours: "当前在沪深连续竞价时段之外",
+  planNotStarted: "投资计划尚未到起始月",
+  planEnded: "计划分批月份已结束",
+  planUnavailable: "实际计划暂不可读，请刷新",
+  policyUnavailable: "计划绑定的规则版本暂不可用",
+  noEligibleFund: "本组暂无符合条件的 ETF，原因见下表",
+  calibrationUnavailable: "缺少历史溢价阈值",
+  navUnavailable: "暂缺可用单位净值",
+  askAboveLimit: "卖一超过策略限价",
+  iopvPremiumAboveLimit: "卖一溢价超过 8%",
+  quoteUnavailable: "当天最新盘口未核实",
+  iopvUnavailable: "当天参考净值缺失",
+  noAsks: "当前无可买卖盘",
+  monthlyBudgetUsed: "本组当月额度已用完",
+  smallBudgetUsed: "小笔额度已用完，等待正常限价",
+  planBudgetUsed: "计划本金或本组预算已用完",
+  belowLot: "剩余额度或限价内卖盘不足一手",
+};
 let planState;
 let decision;
 let refreshing;
@@ -95,50 +117,17 @@ function renderGroup(group, preview) {
     const sign = group.close.dailyReturn > 0 ? "+" : "";
     card.append(el("p", `${group.close.date} 收盘 ${format(group.close.value)} · ${sign}${percent(group.close.dailyReturn)} · ${group.close.source}`, "muted"));
   }
-  if (check?.signal) {
-    const trend = check.trendReduced ? "额度减半" : "保留额度";
-    const risk = check.volatilityReduced ? "额度减半" : "保留额度";
-    card.append(
-      el("p", `126 日趋势 ${percent(check.signal.trend)} · ${trend}`),
-      el("p", `20 日年化波动 ${percent(check.signal.volatility)} / 阈值 ${percent(check.volatilityLimit)} · ${risk}`),
-      el("p", `风控额度 ${money(group.riskBudgetCents)} · 本月已买 ${money(group.boughtThisMonthCents)} · 可用额度 ${money(group.remainingOrderCents)}`, "muted"),
-    );
+  if (group.signal) {
+    card.append(el("p", `126 日趋势 ${percent(group.signal.trend)} · 20 日年化波动 ${percent(group.signal.volatility)}`, "muted"));
   }
-  if (check?.code) {
-    const prior = check.candidates[0];
-    card.append(el("p", `候选 ${check.code} · ${prior.date} 开盘估算溢价 ${percent(prior.premium)}`, "muted"));
-  }
-  if (check?.open !== undefined) {
-    card.append(el("p", `开盘估算溢价 ${percent(check.openingPremium)} / 门槛 ${percent(check.premiumLimit)} · 限价 ${check.limitPrice.toFixed(4)} 元`, "muted"));
-  }
-  if (group.bestAsk != null) {
-    card.append(el("p", `当前卖一 ${group.bestAsk.toFixed(3)} 元 · 同口径估算溢价 ${percent(group.askPremium)}`, "muted"));
+  card.append(el("p", `本月额度 ${money(group.monthlyBudgetCents)} · 已买 ${money(group.boughtThisMonthCents)} · 剩余 ${money(group.remainingMonthCents)}`));
+  if (group.smallBudgetCents !== null) {
+    card.append(el("p", `小笔上限 ${money(group.smallBudgetCents)} · 小笔剩余 ${money(group.smallRemainingCents)}`, "muted"));
   }
   if (group.reasons.length) {
-    const labels = {
-      calendarUnavailable: "本月共同交易日暂未核实",
-      afterMonthlyCheck: "本月首个共同交易日已过",
-      awaitCommonOpening: "尚无四只 ETF 当日共同开盘记录",
-      outsideTradingHours: "当前在沪深连续竞价时段之外",
-      planNotStarted: "投资计划尚未到起始月",
-      planEnded: "12 个计划月份已结束",
-      planUnavailable: "实际计划暂不可读，请刷新",
-      policyUnavailable: "计划绑定的规则版本暂不可用",
-      indexUnavailable: "最新指数收盘尚未核实",
-      calibrationUnavailable: "该组缺少校准期指数或净值数据",
-      priorPremiumUnavailable: "缺少近期可用的开盘溢价，暂时无法择券",
-      openingUnavailable: "缺少当天开盘价或当时可用净值",
-      aboveLimit: "今天开盘价高于计划限价",
-      askAboveLimit: "当前卖一高于计划限价",
-      quoteUnavailable: "最新的当日参考净值或盘口报价未核实",
-      noAsks: "当前拿不到可买的卖盘",
-      monthlyBudgetUsed: "当月已买金额达到该组风控额度",
-      planBudgetUsed: "计划本金或该组预算已用完",
-      belowLot: "剩余额度和限价内卖盘未满足一手",
-    };
     const reasons = document.createElement("ul");
     reasons.append(...group.reasons.map((code) => {
-      const item = el("li", labels[code] ?? code);
+      const item = el("li", reasonLabels[code] ?? code);
       item.dataset.reason = code;
       return item;
     }));
@@ -150,7 +139,26 @@ function renderGroup(group, preview) {
   const result = document.createElement("p");
   result.append(el("strong", outcome, "etf-today-order"));
   card.append(result);
+  if (check) {
+    card.dataset.buyable = "true";
+    card.append(el("p", `${check.tier === "small" ? "小笔分批" : "常规分批"} · 本单限价 ${price(check.effectiveLimit)} 元 · 金额含估算费用`, "muted"));
+  }
   return card;
+}
+
+function renderCandidate(candidate, group) {
+  const { code, name, bestAsk, iopv, askPremium, normalLimit, smallLimit, iopvLimit, navDate, quoteAt, reasons } = candidate;
+  const selected = group.decision?.code === code;
+  const outcome = reasons.length ? reasons.map((key) => reasonLabels[key]).join("、")
+    : selected ? "通过 · 已选中" : group.reasons.length ? "价格条件通过" : "通过 · 未选中";
+  const strategyPrice = smallLimit == null ? price(normalLimit) : `${price(normalLimit)} / ${price(smallLimit)}`;
+  const row = tableRow([
+    [code, name].filter(Boolean).join(" "), price(bestAsk), price(iopv, 4), percent(askPremium), strategyPrice,
+    price(iopvLimit), quoteAt ? quoteClock.format(Date.parse(quoteAt)) : "—", outcome,
+  ]);
+  row.dataset.code = code;
+  if (navDate) row.cells[4].append(el("small", `${smallLimit == null ? "" : "正常 / 小笔 · "}${navDate} 净值`));
+  return row;
 }
 
 function renderDecision(data) {
@@ -159,7 +167,7 @@ function renderDecision(data) {
   const summary = data.preview ? "按输入金额试算" : "按已保存计划计算";
   const month = data.monthIndex >= 0 && data.monthIndex < data.installments ? ` · 第 ${data.monthIndex + 1}/${data.installments} 批` : "";
   const checked = quoteClock.format(Date.parse(data.checkedAt));
-  const day = data.monthlyCheck ? ` · 本月检查日 ${data.monthlyCheck}` : "";
+  const day = data.tradingDay ? ` · 本月第 ${data.tradingDay} 个交易日` : "";
   setStatus("etfTodayStatus", `${checked} 北京时间 · ${summary}${month}${day}${data.quoteMode === "snapshot" ? " · 行情使用最近有效快照" : ""}`);
   at("etfPlanSummary").hidden = Boolean(data.planState.error);
   at("etfTodayAmount").textContent = money(data.totalCents);
@@ -167,24 +175,20 @@ function renderDecision(data) {
   at("etfPlanRemaining").textContent = data.preview ? "—" : money(data.remainingCents);
   at("etfTodayGroups").replaceChildren(...data.groups.map((group) => renderGroup(group, data.preview)));
   at("etfTodayQuotesWrap").hidden = false;
-  at("etfTodayQuotes").replaceChildren(...data.quotes.map((quote) => tableRow([
-    [quote.code, quote.name].join(" ").trim(), quote.price?.toFixed(3) ?? "—", quote.iopv?.toFixed(4) ?? "—",
-    percent(quote.premium), quote.quoteAt ? quoteClock.format(Date.parse(quote.quoteAt)) : "—",
-  ])));
+  at("etfTodayQuotes").replaceChildren(...data.groups.flatMap((group) =>
+    group.candidates.map((candidate) => renderCandidate(candidate, group))));
   if (!data.planState.error) {
     at("etfHoldingsWrap").hidden = data.preview;
     at("etfHoldingsRows").replaceChildren(...Object.entries(data.holdings).map(([code, position]) => tableRow([
       code, integer.format(position.shares), money(position.boughtCents),
     ])));
   }
-  if (data.totalCents > 0) {
-    const timestamps = data.groups.filter((group) => group.amountCents > 0).map((group) =>
-      Date.parse(data.quotes.find(({ code }) => code === group.decision.code).quoteAt));
+  if (data.orderExpiresAt) {
     expires = setTimeout(() => {
       at("etfTodayAmount").textContent = "待刷新";
-      document.querySelectorAll(".etf-today-order").forEach((value) => { value.textContent = "请刷新确认本组额度"; });
-      setStatus("etfTodayStatus", "报价已超过两分钟，请刷新确认当前可买金额。");
-    }, Math.max(0, Math.min(...timestamps) + 120_000 - Date.now()));
+      document.querySelectorAll("[data-buyable] .etf-today-order").forEach((value) => { value.textContent = "请刷新确认本组额度"; });
+      setStatus("etfTodayStatus", "盘口或竞价时段已变化，请刷新确认当前可买金额。");
+    }, Math.max(0, Date.parse(data.orderExpiresAt) - Date.now()));
   }
 }
 
@@ -206,7 +210,7 @@ async function refreshToday() {
   enableActions();
   at("etfTodayAmount").textContent = "待刷新";
   at("etfTodayGroups").replaceChildren();
-  setStatus("etfTodayStatus", "正在核对指数、开盘价和计划余额…");
+  setStatus("etfTodayStatus", "正在核对卖盘、当日参考净值和计划余额…");
   try {
     const data = await requestJson(`/api/cn-etf-today?budget=${budgetInput.valueAsNumber}`, {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(28_000)]),

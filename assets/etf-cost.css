@@ -306,6 +306,8 @@
 .etf-today-group h3, .etf-plan-holdings h3 { font-size: 16px; }
 .etf-today-group p { margin-top: 5px; }
 .etf-today-group ul { margin: 7px 0 0; padding-left: 20px; font-size: 13px; }
+.etf-today-quotes td:last-child { min-width: 11rem; white-space: normal; text-align: left; }
+.etf-today-quotes small { display: block; color: var(--muted); }
 .etf-plan-holdings { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 
 .etf-budget-input {

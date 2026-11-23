@@ -67,8 +67,8 @@ async function disclosedNav(code) {
   });
 }
 
-function pairInputs(sessions, openingPrices, netValues, calendar, delay = usableAfterSessions) {
-  const indexOf = new Map(calendar.map((date, index) => [date, index]));
+function* usableNavs(sessions, netValues, calendar, delay = usableAfterSessions) {
+  const tradingDates = new Set(calendar);
   let calendarIndex = 0;
   const available = [];
   for (const row of netValues) {
@@ -83,10 +83,8 @@ function pairInputs(sessions, openingPrices, netValues, calendar, delay = usable
   let nextAction = 0;
   let current;
   let latestAction = "";
-  const pairs = [];
-  for (const [date] of sessions) {
-    const open = openingPrices.get(date);
-    if (open === undefined || !indexOf.has(date)) continue;
+  for (const date of sessions) {
+    if (!tradingDates.has(date)) continue;
     while (nextNav < available.length && available[nextNav].usableDay <= date) {
       current = available[nextNav];
       nextNav += 1;
@@ -97,10 +95,15 @@ function pairInputs(sessions, openingPrices, netValues, calendar, delay = usable
     }
     // 份额折算或分红后，等到新价格口径下的净值可用再比较。
     if (current && current.date >= latestAction) {
-      pairs.push([date, open, current.date, current.nav, current.usableDay]);
+      yield [date, { nav: current.nav, navDate: current.date, usableDay: current.usableDay }];
     }
   }
-  return pairs;
+}
+
+function pairInputs(sessions, openingPrices, netValues, calendar, delay = usableAfterSessions) {
+  const days = Array.from(sessions, ([date]) => date).filter((date) => openingPrices.has(date));
+  return Array.from(usableNavs(days, netValues, calendar, delay), ([date, { nav, navDate, usableDay }]) =>
+    [date, openingPrices.get(date), navDate, nav, usableDay]);
 }
 
 const series = { NDX: "NASDAQ100", NBI: "NASDAQNBI" };
@@ -160,5 +163,5 @@ async function nasdaqIndexCloses(symbol, from, through) {
   return points;
 }
 
-module.exports = { unadjustedBars, unadjustedOpenLows, disclosedNav, pairInputs, usableAfterSessions,
+module.exports = { unadjustedBars, unadjustedOpenLows, disclosedNav, pairInputs, usableNavs, usableAfterSessions,
   delayedNavSessions, series, fredIndexCloses, nasdaqIndexCloses };

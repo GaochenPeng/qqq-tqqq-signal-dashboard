@@ -41,8 +41,12 @@ CREATE TABLE IF NOT EXISTS etf_investment_plan (
 );
 
 ALTER TABLE etf_investment_plan
-  ADD COLUMN IF NOT EXISTS policy_version text NOT NULL DEFAULT 'trend-vol-premium-v1',
+  ADD COLUMN IF NOT EXISTS policy_version text NOT NULL DEFAULT 'monthly-premium-v2',
   ADD COLUMN IF NOT EXISTS installments smallint NOT NULL DEFAULT 12 CHECK (installments > 0);
+
+ALTER TABLE etf_investment_plan ALTER COLUMN policy_version SET DEFAULT 'monthly-premium-v2';
+UPDATE etf_investment_plan SET policy_version = 'monthly-premium-v2'
+  WHERE policy_version = 'trend-vol-premium-v1';
 
 CREATE TABLE IF NOT EXISTS etf_plan_trades (
   entry_key uuid PRIMARY KEY,

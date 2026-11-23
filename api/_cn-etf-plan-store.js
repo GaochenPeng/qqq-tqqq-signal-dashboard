@@ -1,5 +1,5 @@
 const { forecastPool, forecastStoreEnabled } = require("./_etf-forecast-store");
-const { factorPolicy } = require("./_cn-etf-factor");
+const { monthlyPolicy } = require("./_cn-etf-today");
 
 function conflict(message) {
   return Object.assign(new Error(message), { statusCode: 409 });
@@ -64,7 +64,7 @@ function savePlan({ budget, startMonth }) {
     await client.query(`
       INSERT INTO etf_investment_plan (budget_yuan, start_month, installments, policy_version)
       VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING
-    `, [budget, day, factorPolicy.installments, factorPolicy.version]);
+    `, [budget, day, monthlyPolicy.installments, monthlyPolicy.version]);
     const { rows: [plan] } = await client.query(`
       SELECT budget_yuan, start_month::text FROM etf_investment_plan WHERE id = 1 FOR UPDATE
     `);

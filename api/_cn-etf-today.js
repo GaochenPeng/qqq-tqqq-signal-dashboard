@@ -1,4 +1,13 @@
-const { factorPolicy, factorGroups, calibrateFactor, openingDecision } = require("./_cn-etf-factor");
+const { factorPolicy, factorGroups, calibrateFactor } = require("./_cn-etf-factor");
+
+const monthlyPolicy = Object.freeze({
+  version: "monthly-premium-v2",
+  installments: factorPolicy.installments,
+  earlyDays: 10,
+  normalPremium: 0.05,
+  maximumPremium: 0.08,
+  smallFraction: 0.25,
+});
 
 const codes = Object.keys(factorGroups);
 const indexesToCodes = Object.fromEntries(["NDX", "NBI"].map((index) =>
@@ -10,6 +19,7 @@ const shanghaiClock = new Intl.DateTimeFormat("en-CA", {
 const quoteMaxAgeMs = 120_000;
 const lotSize = 100;
 const costRate = 0.0005;
+const precision = 1e-10;
 
 function chinaClock(now = new Date()) {
   const parts = Object.fromEntries(shanghaiClock.formatToParts(now).map(({ type, value }) => [type, value]));
@@ -48,7 +58,7 @@ function estimateLots(asks, limit, budgetCents) {
   let shares = 0;
   let amountCents = 0;
   for (const ask of asks) {
-    if (ask.price > limit + 1e-12) break;
+    if (ask.price > limit + precision) break;
     const lotCents = Math.ceil(Math.round(ask.price * lotSize * 100) * (1 + costRate));
     const lots = Math.min(ask.lots, Math.floor((budgetCents - amountCents) / lotCents));
     shares += lots * lotSize;
@@ -57,58 +67,104 @@ function estimateLots(asks, limit, budgetCents) {
   return { shares, amountCents };
 }
 
-function checkSession({ date, minutes }, history) {
+function checkSession({ date, minutes }, calendar) {
   const month = date.slice(0, 7);
-  const first = history.common.find((day) => day.startsWith(month));
+  const tradingDay = calendar.filter((day) => day.startsWith(month)).indexOf(date) + 1;
   const reasons = [];
-  if (!history.calendar.length) reasons.push("calendarUnavailable");
-  else if (first && first < date) reasons.push("afterMonthlyCheck");
-  else if (!history.common.includes(date)) reasons.push("awaitCommonOpening");
+  if (!calendar.length) reasons.push("calendarUnavailable");
+  else if (!tradingDay) reasons.push("notTradingDate");
   const continuous = (minutes >= 570 && minutes < 690) || (minutes >= 780 && minutes < 897);
   if (!continuous) reasons.push("outsideTradingHours");
-  return { first: first ?? null, reasons };
+  const closes = minutes < 690 ? "11:30" : "14:57";
+  const endsAt = continuous ? Date.parse(date + "T" + closes + ":00+08:00") : null;
+  return { tradingDay: tradingDay || null, endsAt, reasons };
 }
 
-function inspectGroup({ index, decision, reference, quote, sum, budgetCents, totalRemaining, baseReasons, date, nowMs, marketMode }) {
-  const groupBudgetCents = budgetCents * indexesToCodes[index].length / codes.length;
-  const riskBudgetCents = Math.floor((decision?.proposedAmount ?? 0) * 100 + 1e-8);
-  const remainingGroupCents = Math.max(0, groupBudgetCents - sum.bought);
-  const remainingOrderCents = Math.max(0, Math.min(
-    riskBudgetCents - sum.boughtThisMonth, remainingGroupCents, totalRemaining,
-  ));
+function limitAtTick(reference, premium) {
+  return Math.floor((reference * (1 + premium) + precision) * 1_000) / 1_000;
+}
 
-  const reasons = [...baseReasons];
-  if (!reference?.fresh) reasons.push("indexUnavailable");
-  if (!decision && reference?.fresh) reasons.push("calibrationUnavailable");
-  if (decision && decision.reason !== "limitMet") reasons.push(decision.reason);
-  if (riskBudgetCents > 0 && remainingOrderCents === 0) {
-    reasons.push(totalRemaining === 0 || remainingGroupCents === 0 ? "planBudgetUsed" : "monthlyBudgetUsed");
-  }
-
+function inspectFund({
+  code, index, quote, marketMode, valuation, fittedPremium, late,
+  date, nowMs, remainingMonthCents, smallRemainingCents, groupBlocked,
+}) {
+  const reasons = [];
   const quoteAge = nowMs - Date.parse(quote?.quoteAt);
   const quoteFresh = marketMode === "upstream" && quote?.quoteAt?.slice(0, 10) === date &&
-    quoteAge >= -10_000 && quoteAge <= quoteMaxAgeMs && quote.iopv > 0;
-  if (decision?.code && !quoteFresh) reasons.push("quoteUnavailable");
-  const bestAsk = quoteFresh ? quote.asks[0]?.price : undefined;
-  const askPremium = bestAsk && decision?.nav ? bestAsk / decision.nav - 1 : null;
-  if (quoteFresh && decision?.limitPrice) {
-    if (!bestAsk) reasons.push("noAsks");
-    else if (bestAsk > decision.limitPrice + 1e-12) reasons.push("askAboveLimit");
+    quoteAge >= -10_000 && quoteAge <= quoteMaxAgeMs;
+  const iopv = quoteFresh && quote.iopv > 0 ? quote.iopv : null;
+  const bestAsk = quoteFresh ? quote.asks[0]?.price ?? null : null;
+  if (!quoteFresh) reasons.push("quoteUnavailable");
+  else if (!iopv) reasons.push("iopvUnavailable");
+  else if (!bestAsk) reasons.push("noAsks");
+
+  const normalPremium = late ? monthlyPolicy.normalPremium : fittedPremium;
+  if (!valuation) reasons.push("navUnavailable");
+  if (normalPremium === undefined) reasons.push("calibrationUnavailable");
+  const normalLimit = valuation && normalPremium !== undefined ? limitAtTick(valuation.nav, normalPremium) : null;
+  const smallLimit = valuation && late ? limitAtTick(valuation.nav, monthlyPolicy.maximumPremium) : null;
+  const iopvLimit = index === "NDX" && iopv ? limitAtTick(iopv, monthlyPolicy.maximumPremium) : null;
+  const askPremium = bestAsk && iopv ? bestAsk / iopv - 1 : null;
+  const strategyMax = smallLimit ?? normalLimit;
+  if (bestAsk && strategyMax !== null && bestAsk > strategyMax + precision) reasons.push("askAboveLimit");
+  if (bestAsk && iopvLimit !== null && bestAsk > iopvLimit + precision) reasons.push("iopvPremiumAboveLimit");
+
+  const small = late && bestAsk && normalLimit !== null && bestAsk > normalLimit + precision;
+  const tier = small ? "small" : "normal";
+  const tierLimit = small ? smallLimit : normalLimit;
+  const effectiveLimit = tierLimit === null ? null : Math.min(tierLimit, iopvLimit ?? Infinity);
+  const remainingOrderCents = small ? smallRemainingCents : remainingMonthCents;
+  if (small && bestAsk <= smallLimit + precision && remainingOrderCents === 0 && remainingMonthCents > 0) {
+    reasons.push("smallBudgetUsed");
   }
 
   let order = { shares: 0, amountCents: 0 };
-  if (!reasons.length && decision?.limitPrice) {
-    order = estimateLots(quote.asks, decision.limitPrice, remainingOrderCents);
+  if (!groupBlocked && !reasons.length && effectiveLimit !== null) {
+    order = estimateLots(quote.asks, effectiveLimit, remainingOrderCents);
     if (!order.shares) reasons.push("belowLot");
   }
+  return {
+    code, name: quote?.manager ?? "", quoteAt: quote?.quoteAt ?? null, bestAsk, iopv, askPremium,
+    nav: valuation?.nav ?? null, navDate: valuation?.navDate ?? null, normalLimit, smallLimit,
+    iopvLimit, effectiveLimit, tier, remainingOrderCents, reasons, ...order,
+  };
+}
+
+function inspectGroup({
+  index, reference, quotes, history, calibration, sum, budgetCents, installments, totalRemaining, session, date, nowMs, marketMode,
+}) {
+  const members = indexesToCodes[index];
+  const groupBudgetCents = Math.floor(budgetCents * (members.length / codes.length));
+  const monthlyBudgetCents = Math.floor(groupBudgetCents / installments);
+  const remainingGroupCents = Math.max(0, groupBudgetCents - sum.bought);
+  const availableCents = Math.min(remainingGroupCents, totalRemaining);
+  const remainingMonthCents = Math.max(0, Math.min(monthlyBudgetCents - sum.boughtThisMonth, availableCents));
+  const late = index === "NDX" && session.tradingDay > monthlyPolicy.earlyDays;
+  const smallBudgetCents = late ? Math.floor(monthlyBudgetCents * monthlyPolicy.smallFraction) : null;
+  // 每组当月实盘买入占用本组额度，换一只同指数 ETF 也不会重置额度。
+  const smallRemainingCents = late ? Math.max(0, Math.min(smallBudgetCents - sum.boughtThisMonth, availableCents)) : null;
+  const reasons = [...session.reasons];
+  if (availableCents === 0) reasons.push("planBudgetUsed");
+  else if (remainingMonthCents === 0) reasons.push("monthlyBudgetUsed");
+  const candidates = members.map((code) => inspectFund({
+    code, index, quote: quotes.get(code), marketMode, valuation: history.navs.get(code),
+    fittedPremium: calibration.funds[code]?.premiumLimit, late, date, nowMs, remainingMonthCents, smallRemainingCents,
+    groupBlocked: reasons.length > 0,
+  }));
+  const eligible = candidates.filter((item) => item.amountCents > 0)
+    .sort((a, b) => a.askPremium - b.askPremium || a.code.localeCompare(b.code));
+  const decision = eligible[0] ?? null;
+  if (!decision && !reasons.length) reasons.push("noEligibleFund");
   const latest = reference?.rows.at(-1);
   const before = reference?.rows.at(-2);
+  const indicator = calibration.groups[index];
   return {
-    index, decision: decision ?? null, reasons: [...new Set(reasons)],
+    index, decision, candidates, reasons,
     close: latest ? { date: latest[0], value: latest[1], dailyReturn: before ? latest[1] / before[1] - 1 : null,
       source: reference.source, fresh: reference.fresh } : null,
-    boughtThisMonthCents: sum.boughtThisMonth, remainingGroupCents, riskBudgetCents, remainingOrderCents,
-    bestAsk: bestAsk ?? null, askPremium, ...order,
+    signal: indicator?.states.at(-1) ?? null, volatilityLimit: indicator?.volatilityLimit ?? null,
+    monthlyBudgetCents, boughtThisMonthCents: sum.boughtThisMonth, remainingMonthCents, smallBudgetCents, smallRemainingCents,
+    shares: decision?.shares ?? 0, amountCents: decision?.amountCents ?? 0,
   };
 }
 
@@ -116,14 +172,13 @@ function todayDecision({ now, budget, planState, history, indexes, market }) {
   const clock = chinaClock(now);
   const month = clock.date.slice(0, 7);
   const plan = planState.plan ?? { budget, startMonth: month };
-  const installments = plan.installments ?? factorPolicy.installments;
+  const installments = plan.installments ?? monthlyPolicy.installments;
   const monthIndex = monthNumber(month) - monthNumber(plan.startMonth);
-  const session = checkSession(clock, history);
-  const baseReasons = [...session.reasons];
-  if (monthIndex < 0) baseReasons.push("planNotStarted");
-  else if (monthIndex >= installments) baseReasons.push("planEnded");
-  if (planState.error) baseReasons.push("planUnavailable");
-  if (plan.policyVersion && plan.policyVersion !== factorPolicy.version) baseReasons.push("policyUnavailable");
+  const session = checkSession(clock, history.calendar);
+  if (monthIndex < 0) session.reasons.push("planNotStarted");
+  else if (monthIndex >= installments) session.reasons.push("planEnded");
+  if (planState.error) session.reasons.push("planUnavailable");
+  if (plan.policyVersion && plan.policyVersion !== monthlyPolicy.version) session.reasons.push("policyUnavailable");
 
   const budgetCents = plan.budget * 100;
   const exposure = summarizePlan(planState.trades, month, budgetCents);
@@ -132,36 +187,26 @@ function todayDecision({ now, budget, planState, history, indexes, market }) {
   const quotesByCode = new Map([...(market?.funds ?? []), ...(market?.forecastQuote ? [market.forecastQuote] : [])]
     .map((quote) => [quote.code, quote]));
   let totalRemaining = exposure.remainingCents;
-  const groups = Object.entries(indexesToCodes).map(([index, members]) => {
-    const calibrated = calibration.groups[index] && members.every((code) => calibration.funds[code]);
-    const baseAmount = plan.budget * members.length / codes.length / installments;
-    const decision = calibrated
-      ? openingDecision({ index, members }, clock.date, baseAmount, calibration, history.premiums)
-      : null;
+  const groups = Object.keys(indexesToCodes).map((index) => {
     const verdict = inspectGroup({
-      index, decision, reference: indexes[index], quote: quotesByCode.get(decision?.code),
-      sum: exposure.groups[index], budgetCents, totalRemaining, baseReasons, date: clock.date,
+      index, reference: indexes[index], quotes: quotesByCode, history, calibration, session, installments,
+      sum: exposure.groups[index], budgetCents, totalRemaining, date: clock.date,
       nowMs: now.getTime(), marketMode: market?.mode,
     });
     totalRemaining -= verdict.amountCents;
     return verdict;
   });
-  const quotes = codes.map((code) => {
-    const quote = quotesByCode.get(code);
-    return {
-      code, name: quote?.manager ?? "",
-      price: quote?.lastPrice ?? null, quoteAt: quote?.quoteAt ?? null, iopv: quote?.iopv ?? null,
-      premium: quote?.iopv > 0 ? quote.lastPrice / quote.iopv - 1 : null,
-    };
-  });
+  const orderExpiries = groups.filter((group) => group.decision)
+    .map(({ decision }) => Date.parse(decision.quoteAt) + quoteMaxAgeMs);
   return {
-    date: clock.date, checkedAt: now.toISOString(), monthlyCheck: session.first,
+    date: clock.date, checkedAt: now.toISOString(), tradingDay: session.tradingDay,
     planBudget: plan.budget, monthIndex, installments,
     preview: !planState.plan, planState, holdings: exposure.positions,
     boughtCents: exposure.boughtCents, remainingCents: exposure.remainingCents,
     totalCents: groups.reduce((sum, group) => sum + group.amountCents, 0),
-    groups, quotes, quoteMode: market?.mode ?? null,
+    groups, quoteMode: market?.mode ?? null,
+    orderExpiresAt: orderExpiries.length ? new Date(Math.min(session.endsAt, ...orderExpiries)).toISOString() : null,
   };
 }
 
-module.exports = { chinaClock, todayDecision };
+module.exports = { chinaClock, monthlyPolicy, todayDecision };

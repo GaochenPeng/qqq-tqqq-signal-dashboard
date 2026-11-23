@@ -1,7 +1,7 @@
 const { cnEtfMarket } = require("./_cn-etf-market");
 const { loadPremiums } = require("./_cn-etf-backtest");
 const { readFactorIndexes, factorGroups } = require("./_cn-etf-factor");
-const { unadjustedBars, disclosedNav, pairInputs, series, fredIndexCloses, nasdaqIndexCloses } = require("./_cn-etf-history-source");
+const { unadjustedBars, disclosedNav, usableNavs, series, fredIndexCloses, nasdaqIndexCloses } = require("./_cn-etf-history-source");
 
 const codes = Object.keys(factorGroups);
 const dayMs = 86_400_000;
@@ -43,27 +43,20 @@ async function refreshIndex(symbol, saved, date) {
 }
 
 async function refreshPremiums(date) {
-  const from = shiftDate(date, -42);
-  const [calendarBars, ...recent] = await Promise.all([
-    unadjustedBars("1.000001", from, date),
-    ...codes.map(async (code) => {
-      const exchange = code.startsWith("15") ? "0" : "1";
-      const [bars, nav] = await Promise.all([unadjustedBars(`${exchange}.${code}`, from, date), disclosedNav(code)]);
-      return { code, bars, nav };
-    }),
+  const monthStart = date.slice(0, 7) + "-01";
+  const [calendarBars, recent] = await Promise.all([
+    unadjustedBars("1.000001", shiftDate(monthStart, -21), date),
+    Promise.allSettled(codes.map(disclosedNav)),
   ]);
   const calendar = [...calendarBars.keys()];
-  const common = calendar.filter((day) => recent.every(({ bars }) => bars.has(day)));
-  const archive = loadPremiums();
-  const holdings = recent.map(({ code, bars, nav }) => {
-    const rows = pairInputs([...bars.keys()].map((day) => [day]), bars, nav, calendar);
-    const saved = new Map(archive.get(code));
-    for (const [day, open, navDate, value, usableDay] of rows) {
-      if (day >= shiftDate(date, -10)) saved.set(day, { open, navDate, nav: value, usableDay });
-    }
-    return [code, new Map([...saved].sort(([a], [b]) => a.localeCompare(b)))];
-  });
-  return { calendar, common, premiums: new Map(holdings) };
+  const navs = new Map();
+  for (const [i, result] of recent.entries()) {
+    if (result.status === "rejected") continue;
+    const [latest] = usableNavs([date], result.value, calendar);
+    const nav = latest?.[1];
+    if (nav && nav.navDate >= shiftDate(date, -14)) navs.set(codes[i], nav);
+  }
+  return { calendar, navs, premiums: loadPremiums() };
 }
 
 async function marketInputs(date) {
@@ -79,7 +72,7 @@ async function marketInputs(date) {
   const indexes = Object.fromEntries(indexResults.filter((item) => item.status === "fulfilled").map((item) => item.value));
   return {
     market: market.value ?? null,
-    history: history.value ?? { calendar: [], common: [], premiums: loadPremiums() },
+    history: history.value ?? { calendar: [], navs: new Map(), premiums: loadPremiums() },
     indexes,
   };
 }
