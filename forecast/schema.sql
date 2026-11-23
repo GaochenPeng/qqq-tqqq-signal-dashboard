@@ -60,3 +60,20 @@ CREATE TABLE IF NOT EXISTS etf_plan_trades (
 );
 
 CREATE INDEX IF NOT EXISTS etf_plan_trades_by_date ON etf_plan_trades (plan_id, traded_on, recorded_at, entry_key);
+
+CREATE TABLE IF NOT EXISTS etf_calendar_observations (
+  event_key text NOT NULL,
+  event_kind text NOT NULL CHECK (event_kind IN ('macro', 'earnings')),
+  release_at timestamptz NOT NULL,
+  observed_at timestamptz NOT NULL,
+  forecast double precision,
+  actual double precision,
+  forecast_source text,
+  actual_source text,
+  PRIMARY KEY (event_key, observed_at),
+  CHECK ((forecast IS NOT NULL) <> (actual IS NOT NULL)),
+  CHECK (forecast IS NULL OR (observed_at < release_at AND forecast_source IS NOT NULL)),
+  CHECK (actual IS NULL OR (observed_at >= release_at AND actual_source IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS etf_calendar_release ON etf_calendar_observations (release_at);

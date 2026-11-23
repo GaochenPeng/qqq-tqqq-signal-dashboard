@@ -5,6 +5,7 @@ const { unadjustedBars, disclosedNav, usableNavs, series, fredIndexCloses, nasda
 const { completedUsThrough } = require("./_cn-etf-risk");
 const { refreshRiskCloses } = require("./_cn-etf-risk-source");
 const { refreshEvents } = require("./_cn-etf-event-source");
+const { refreshCalendar } = require("./_cn-etf-calendar-store");
 
 const codes = Object.keys(factorGroups);
 const dayMs = 86_400_000;
@@ -64,11 +65,12 @@ async function refreshPremiums(date) {
 
 async function marketInputs(date, through, now) {
   const saved = readFactorIndexes() ?? {};
-  const [market, history, closes, feeds, ...indexResults] = await Promise.allSettled([
+  const [market, history, closes, feeds, calendar, ...indexResults] = await Promise.allSettled([
     cnEtfMarket(),
     refreshPremiums(date),
     refreshRiskCloses(shiftDate(through, -14), through),
     refreshEvents(now),
+    refreshCalendar(now),
     ...Object.keys(series).map(async (symbol) => [
       symbol,
       await refreshIndex(symbol, saved[symbol] ?? [], through),
@@ -80,6 +82,7 @@ async function marketInputs(date, through, now) {
     history: history.value ?? { calendar: [], navs: new Map(), premiums: loadPremiums() },
     indexes,
     riskInputs: { closes: closes.value, feeds: feeds.value },
+    calendar: calendar.value ?? { items: [], unavailable: ["宏观和财报日历"], archive: "error" },
   };
 }
 

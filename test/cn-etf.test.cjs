@@ -15,6 +15,8 @@ const { monthlyPolicy, todayDecision } = require("../api/_cn-etf-today");
 const { completedUsThrough } = require("../api/_cn-etf-risk");
 const { parseEventFeed } = require("../api/_cn-etf-event-source");
 const { parseUsCloses } = require("../api/_cn-etf-risk-source");
+const { macroRows, earningsRows } = require("../api/_cn-etf-calendar-source");
+const { summarizeCalendar } = require("../api/_cn-etf-calendar-store");
 
 function rawBatch(timestamp, missingIopv = null) {
   return snapshot.funds.map((fund) => {
@@ -633,4 +635,93 @@ test("official CSV closes select the named field and exclude dates after the cut
   assert.deepEqual(parseUsCloses(us, "10 Yr", "2026-11-15", "2026-11-20"),
     [["2026-11-19", 5.04], ["2026-11-20", 4.92]]);
   assert.throws(() => parseUsCloses(us, "CLOSE", "2026-11-15", "2026-11-20"), /列不完整/);
+});
+
+test("same-time macro releases only match the corresponding forecast and core PCE uses the matching index", () => {
+  const scheduledAt = "2026-11-25T13:30:00.000Z";
+  const macro = [
+    { source: "bea", eventName: "Personal Income and Outlays (PCE)", scheduledAt, periodLabel: "October 2026", actual: "3.6", unit: "% y/y, PCE price index" },
+    { source: "bea", eventName: "GDP (Second Estimate) and Corporate Profits", scheduledAt, actual: "3.3", unit: "% q/q annualized, real GDP" },
+    { source: "dol", eventName: "Initial Jobless Claims", scheduledAt, actual: "201", unit: "thousands, seasonally adjusted" },
+  ];
+  const expectation = (title, forecast, date = "2026-11-25T08:30:00-05:00") => ({ title, forecast, country: "USD", date });
+  const consensus = [
+    expectation("PCE Price Index y/y", "3.2%"),
+    expectation("Core PCE Price Index m/m", "0.3%"),
+    expectation("Prelim GDP q/q", "3.5%"),
+    expectation("Unemployment Claims", "205K"),
+    expectation("Unemployment Claims", "301K", "2026-11-26T08:30:00-05:00"),
+  ];
+  const coreIndex = new Map([["2026-09-01", 100], ["2026-10-01", 100.4]]);
+  const items = macroRows(macro, consensus, coreIndex, "2026-11-25T14:00:00.000Z");
+  assert.deepEqual(items.map(({ indicator, forecast, actual }) => [indicator, forecast, actual]),
+    [["corePce", 0.3, 0.4], ["gdp", 3.5, 3.3], ["claims", 205, 201]]);
+  assert.equal(items[0].actualSource.name, "BEA（FRED 转发）");
+  assert.equal(macroRows(macro, consensus, new Map(), "2026-11-25T14:00:00.000Z")[0].actual, null);
+  const before = macro.map((row) => ({ ...row, actual: null }));
+  const pending = macroRows(before, consensus, new Map(), "2026-11-25T13:29:59.000Z");
+  assert.equal(pending[0].forecast, 0.3);
+  assert.ok(pending.every(({ actual }) => actual === null));
+});
+
+test("Nasdaq calendar numbers retain EPS basis and cannot record a future print as a pre-release estimate", () => {
+  const raw = { symbol: "NVDA", fiscalQuarterEnding: "Oct/2026", eps: "($0.16)", epsForecast: "$-0.05" };
+  const day = "2026-11-17";
+  const before = earningsRows([raw], day, "2026-11-17T04:59:00.000Z")[0];
+  assert.equal(before.releaseAt, "2026-11-17T05:00:00.000Z");
+  assert.equal(before.actual, null);
+  assert.equal(before.forecast, null);
+  const posted = earningsRows([raw], day, "2026-11-17T22:00:00.000Z")[0];
+  assert.equal(posted.actual, -0.16);
+  assert.equal(posted.forecast, -0.05);
+  assert.equal(earningsRows([{ ...raw, symbol: "HPE" }], day, posted.observedAt).length, 0);
+});
+
+test("the event factor prefers the stored pre-release estimate and earliest captured actual", () => {
+  const [item] = earningsRows([
+    { symbol: "NVDA", fiscalQuarterEnding: "Oct/2026", eps: "2.70", epsForecast: "$2.60" },
+  ], "2026-11-17", "2026-11-18T00:00:00.000Z");
+  const before = new Date("2026-11-16T12:00:00Z");
+  const first = new Date("2026-11-17T22:00:00Z");
+  const [qualified] = summarizeCalendar([item], new Map([[item.key, {
+    forecast: 2.47, actual: 2.68, forecast_at: before, actual_at: first,
+  }]]));
+  assert.equal(qualified.surprise, 0.21);
+  assert.equal(qualified.forecastAt, before.toISOString());
+  assert.equal(qualified.actualAt, first.toISOString());
+  const [historical] = summarizeCalendar([item], new Map());
+  assert.equal(historical.surprise, 0.10);
+  assert.equal(historical.forecastAt, null);
+});
+
+test("a saved pre-release observation stays visible when the provider returns no event rows", () => {
+  const release = new Date("2026-11-25T13:30:00Z");
+  const forecastAt = new Date("2026-11-23T08:00:00Z");
+  const key = "macro:corePce:" + release.toISOString();
+  const [fallback] = summarizeCalendar([], new Map([[key, {
+    release_at: release, forecast: 0.3, forecast_at: forecastAt, actual: null, actual_at: null,
+  }]]));
+  assert.equal(fallback.label, "美国核心 PCE 环比");
+  assert.equal(fallback.forecast, 0.3);
+  assert.equal(fallback.forecastAt, forecastAt.toISOString());
+  assert.equal(fallback.actual, null);
+  assert.equal(fallback.surprise, null);
+  assert.equal(fallback.fromArchive, true);
+});
+
+test("a verified fresh EPS miss enters the event wait while the same historical estimate cannot block orders", () => {
+  const fixture = todayFixture();
+  const observed = "2025-01-02T22:00:00.000Z";
+  const [item] = earningsRows([{ symbol: "NVDA", fiscalQuarterEnding: "Oct/2024", epsForecast: "2.60", eps: "2.57" }],
+    "2025-01-02", observed);
+  fixture.calendar = { items: summarizeCalendar([item], new Map()) };
+  assert.ok(todayDecision(fixture).groups[0].amountCents > 0);
+  fixture.calendar.items = summarizeCalendar([item], new Map([[item.key, {
+    forecast: 2.60, actual: 2.57, forecast_at: new Date("2025-01-01T18:00:00Z"), actual_at: new Date(observed),
+  }]]));
+  const [ndx, nbi] = todayDecision(fixture).groups;
+  assert.equal(ndx.amountCents, 0);
+  assert.equal(ndx.risk.blockers[0].code, "eventPending");
+  assert.match(ndx.risk.blockers[0].why, /0\.03 美元/);
+  assert.ok(nbi.amountCents > 0);
 });

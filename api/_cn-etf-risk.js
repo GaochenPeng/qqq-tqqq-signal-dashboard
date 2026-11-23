@@ -90,7 +90,29 @@ function marketGroup(index, factors, feeds, events) {
   return { blockers, smallWait };
 }
 
-function assessMarketRisk({ now, indexes, riskInputs }) {
+function calendarRiskEvents(calendar, now) {
+  return (calendar?.items ?? []).flatMap((item) => {
+    if (!item.forecastAt || !item.actualAt) return [];
+    const earningsMiss = item.type === "earnings" && item.surprise < 0 &&
+      now.getTime() - Date.parse(item.releaseAt) < 3 * dayMs;
+    const hotterInflation = ["cpi", "corePce"].includes(item.indicator) && item.surprise >= 0.1;
+    if (!earningsMiss && !hotterInflation) return [];
+    const difference = Math.abs(item.surprise).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
+    return [{
+      topic: item.key,
+      summary: earningsMiss ? `${item.label}低于已保存预期 ${difference} 美元/股`
+        : `${item.label}高于已保存预期 ${difference} 个百分点`,
+      title: item.label,
+      link: item.actualSource.url,
+      publishedAt: earningsMiss ? item.actualAt : item.releaseAt,
+      kind: "data",
+      source: item.actualSource.name,
+      scope: earningsMiss ? ["NDX"] : ["NDX", "NBI"],
+    }];
+  });
+}
+
+function assessMarketRisk({ now, indexes, riskInputs, calendar }) {
   const through = completedUsThrough(now);
   const { closes = {}, feeds = [] } = riskInputs ?? {};
   const ndx = indexes.NDX?.fresh ? indexes.NDX : null;
@@ -99,7 +121,7 @@ function assessMarketRisk({ now, indexes, riskInputs }) {
   const inputs = { ...closes, biotech: nbi && { ...nbi, url: "https://indexes.nasdaq.com/Index/Overview/NBI" } };
   const factors = Object.fromEntries(Object.keys(labels)
     .map((key) => [key, compareCloses(key, inputs[key], beforeDate, date, through)]));
-  const events = feeds.flatMap(({ items }) => items ?? [])
+  const events = [...feeds.flatMap(({ items }) => items ?? []), ...calendarRiskEvents(calendar, now)]
     .filter(({ publishedAt }) => Date.parse(publishedAt) <= now.getTime())
     .map((event) => {
       const published = usMarketClock(new Date(event.publishedAt));

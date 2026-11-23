@@ -56,6 +56,11 @@
         <dl id="etfTodayFactors" class="etf-today-factors"></dl>
         <ul id="etfTodayEvents" class="etf-today-events"></ul>
         <p id="etfTodayEventStatus" class="muted"></p>
+        <details id="etfTodayCalendar" class="etf-today-context" open hidden>
+          <summary>预期和实际值</summary>
+          <ul id="etfTodayCalendarRows" class="etf-today-events"></ul>
+          <p id="etfTodayCalendarStatus" class="muted"></p>
+        </details>
       </section>
 
       <details class="etf-backtest-method" id="etfPremiumWhy" open>
@@ -82,6 +87,7 @@
         <p class="muted">策略限价基于估值日后三个沪深交易日起可用的单位净值。纳指 100 还按当天参考净值（IOPV）计算卖一溢价，最高 8%。两道限价都过关时，选择卖一溢价最低的合格 ETF，用限价内卖盘按每手 100 份和单边 0.05% 费用试算。减去本月已录入的同组买入，额度按月计算。</p>
         <p class="muted">关注的财报、公司重大消息和美联储政策发布后，等一整场美股收盘再判断。10 年期美债收益率单日上行 10 个基点或以上时，两组暂停。VIX 上升且芯片、等权一起跌时，暂停纳指 100。生物科技组用自己的指数和 VIX 判断。</p>
         <p class="muted">纳指 100 小额补买还要求芯片和等权都至少持平，以及 VIX 回落。10 个基点和消息等待期是本版采用的风险规则，效果仍待样本外验证。新闻范围覆盖美联储公告、英伟达公告和路透在新闻索引中的重点科技公司报道。</p>
+        <p class="muted">有发布前保存的同口径预期时，CPI 同比或核心 PCE 环比高于预期 0.1 个百分点及以上，按宏观事件等待一场完整美股收盘。关注的科技股每股盈利低于预期时，纳指 100 组按此方式等待。这些条件仍待样本外验证。</p>
       </details>
 
       <div class="etf-plan-holdings">

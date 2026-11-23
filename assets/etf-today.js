@@ -236,13 +236,46 @@ function renderMarketRisk(risk) {
     item.lastChild.title = event.title;
     const time = quoteClock.format(Date.parse(event.publishedAt));
     const status = event.pending ? "等完整美股收盘" : "已有完整美股收盘";
-    const kind = event.kind === "official" ? "官方发布" : "媒体报道";
+    const kind = { official: "官方发布", report: "媒体报道", data: "预期差" }[event.kind];
     item.append(el("span", ` · ${time} · ${kind} · ${status}`, "muted"));
     return item;
   });
   at("etfTodayEvents").replaceChildren(...eventRows);
   const missing = risk.missingFeeds.length ? `暂缺 ${risk.missingFeeds.join("、")}。` : "";
   at("etfTodayEventStatus").textContent = missing || (eventRows.length ? "" : "关注来源最近七天暂无命中规则的消息。");
+}
+
+function renderCalendar(calendar) {
+  const section = at("etfTodayCalendar");
+  section.hidden = !calendar;
+  if (!calendar) return;
+  const sorted = calendar.items.slice().sort((a, b) => a.releaseAt.localeCompare(b.releaseAt));
+  const amount = (value, unit) => value == null ? "—" : `${format(value)}${unit === "%" ? "%" : " " + unit}`;
+  const rows = sorted.map((item) => {
+    const row = el("li", "");
+    const time = item.releaseDate ? `${item.releaseDate} 美东日期` : `${quoteClock.format(Date.parse(item.releaseAt))} 北京时间`;
+    row.append(el("strong", item.label), el("span", ` · ${time}`, "muted"));
+    const values = [`预期 ${amount(item.forecast, item.unit)}`, `实际 ${amount(item.actual, item.unit)}`];
+    if (item.surprise != null) {
+      const unit = item.unit === "%" ? "个百分点" : item.unit;
+      values.push(`预期差 ${item.surprise > 0 ? "+" : ""}${amount(item.surprise, unit)}`);
+    }
+    row.append(el("div", values.join(" · ")));
+    const note = item.forecastAt ? `公布前已存于 ${quoteClock.format(Date.parse(item.forecastAt))}`
+      : item.forecast == null ? "暂无同口径预期"
+      : item.actual == null ? "本次读取的预期" : "供应商历史预期，缺少本地公布前快照";
+    const sources = new Map([item.calendarSource, item.forecastSource, item.actualSource].map((source) => [source.url, source]));
+    const detail = el("span", (item.fromArchive ? "上次存档 · " : "") + note, "muted");
+    for (const source of sources.values()) detail.append(" · ", sourceLink(source.name, source.url));
+    row.append(detail);
+    return row;
+  });
+  at("etfTodayCalendarRows").replaceChildren(...rows);
+  const status = [];
+  if (!rows.length) status.push("这一周暂无已匹配的宏观或财报日历数据。");
+  if (calendar.unavailable.length) status.push(`暂缺 ${calendar.unavailable.join("、")}。`);
+  if (calendar.archive !== "ok") status.push("PG 的公布前快照暂不可用。");
+  at("etfTodayCalendarStatus").textContent = status.join("");
 }
 
 function renderDecision(data) {
@@ -259,6 +292,7 @@ function renderDecision(data) {
   at("etfPlanRemaining").textContent = data.preview ? "—" : money(data.remainingCents);
   at("etfTodayGroups").replaceChildren(...data.groups.map((group) => renderGroup(group, data.preview)));
   renderMarketRisk(data.marketRisk);
+  renderCalendar(data.calendar);
   at("etfTodayQuoteDetails").hidden = false;
   at("etfTodayQuotes").replaceChildren(...data.groups.flatMap((group) =>
     group.candidates.map((candidate) => renderCandidate(candidate, group))));

@@ -191,7 +191,7 @@ function inspectGroup({
   };
 }
 
-function todayDecision({ now, budget, planState, history, indexes, market, riskInputs }) {
+function todayDecision({ now, budget, planState, history, indexes, market, riskInputs, calendar }) {
   const clock = chinaClock(now);
   const month = clock.date.slice(0, 7);
   const plan = planState.plan ?? { budget, startMonth: month };
@@ -207,7 +207,7 @@ function todayDecision({ now, budget, planState, history, indexes, market, riskI
   const exposure = summarizePlan(planState.trades, month, budgetCents);
   const inputRows = Object.fromEntries(Object.entries(indexes).map(([index, { rows }]) => [index, rows]));
   const calibration = calibrateFactor(inputRows, history.premiums);
-  const { groups: riskByIndex, ...marketRisk } = assessMarketRisk({ now, indexes, riskInputs });
+  const { groups: riskByIndex, ...marketRisk } = assessMarketRisk({ now, indexes, riskInputs, calendar });
   const quotesByCode = new Map([...(market?.funds ?? []), ...(market?.forecastQuote ? [market.forecastQuote] : [])]
     .map((quote) => [quote.code, quote]));
   let totalRemaining = exposure.remainingCents;
@@ -229,7 +229,7 @@ function todayDecision({ now, budget, planState, history, indexes, market, riskI
     preview: !planState.plan, planState, holdings: exposure.positions,
     boughtCents: exposure.boughtCents, remainingCents: exposure.remainingCents,
     totalCents: groups.reduce((sum, group) => sum + group.amountCents, 0),
-    groups, marketRisk, quoteMode: market?.mode ?? null,
+    groups, marketRisk, calendar, quoteMode: market?.mode ?? null,
     orderExpiresAt: orderExpiries.length ? new Date(Math.min(session.endsAt, ...orderExpiries)).toISOString() : null,
   };
 }
