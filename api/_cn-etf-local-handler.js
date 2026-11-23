@@ -62,7 +62,7 @@ async function localEtfHandler(req, res, route) {
       const budget = queryBudget(req.query?.budget);
       const now = new Date();
       const [inputs, planState] = await Promise.all([
-        refreshTodayInputs(chinaClock(now).date),
+        refreshTodayInputs(chinaClock(now).date, now),
         readPlan().catch((error) => {
           console.warn("读取本机投资计划失败", error.code ?? "unknown");
           return { enabled: true, plan: null, trades: [], error: "本机投资计划暂时读不到，已暂停加仓判断。" };

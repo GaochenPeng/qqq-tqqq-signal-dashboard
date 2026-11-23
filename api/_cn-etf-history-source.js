@@ -108,10 +108,10 @@ function pairInputs(sessions, openingPrices, netValues, calendar, delay = usable
 
 const series = { NDX: "NASDAQ100", NBI: "NASDAQNBI" };
 
-async function fredIndexCloses(seriesId) {
+async function fredIndexCloses(seriesId, from = "2022-01-01", timeoutMs = 15_000) {
   const source = new URL("https://fred.stlouisfed.org/graph/fredgraph.csv");
-  source.search = new URLSearchParams({ id: seriesId, cosd: "2022-01-01" });
-  const response = await fetch(source, { headers: { Accept: "text/csv" }, signal: AbortSignal.timeout(15_000) });
+  source.search = new URLSearchParams({ id: seriesId, cosd: from });
+  const response = await fetch(source, { headers: { Accept: "text/csv" }, signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`FRED ${seriesId} 返回 HTTP ${response.status}`);
   const csv = await response.text();
   const [columns, ...lines] = csv.trim().split(/\r?\n/);

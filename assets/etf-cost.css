@@ -310,6 +310,24 @@
 .etf-today-target { font-weight: 650; }
 .etf-today-context { margin-top: 10px; color: var(--muted); font-size: 13px; }
 .etf-today-context summary { cursor: pointer; }
+.etf-today-evidence {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.etf-today-evidence h3 { font-size: 16px; }
+.etf-today-evidence .muted, .etf-today-events span { font-size: 13px; }
+.etf-today-factors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+.etf-today-factors dd { margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+.etf-today-events { margin: 8px 0; padding-left: 1.2rem; }
+.etf-today-events li { margin: 5px 0; }
+.etf-today-events a { overflow-wrap: anywhere; }
 #etfPremiumWhy p, #etfTodayQuoteDetails .etf-table-wrap { margin-top: 8px; }
 .etf-today-quotes td:last-child { min-width: 11rem; white-space: normal; text-align: left; }
 .etf-today-quotes small { display: block; color: var(--muted); }

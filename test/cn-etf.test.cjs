@@ -12,6 +12,9 @@ const { factorPolicy, calibrateFactor, planFactorBuys } = require("../api/_cn-et
 const { fixedBacktests } = require("../api/_cn-etf-fixed");
 const { pairInputs, usableNavs } = require("../api/_cn-etf-history-source");
 const { monthlyPolicy, todayDecision } = require("../api/_cn-etf-today");
+const { completedUsThrough } = require("../api/_cn-etf-risk");
+const { parseEventFeed } = require("../api/_cn-etf-event-source");
+const { parseUsCloses } = require("../api/_cn-etf-risk-source");
 
 function rawBatch(timestamp, missingIopv = null) {
   return snapshot.funds.map((fund) => {
@@ -314,11 +317,15 @@ test("out-of-sample factor portfolio and individual ETFs reconcile every fill wi
 });
 
 function todayFixture(date = "2025-01-03") {
-  const before = "2024-12-31";
+  const now = new Date(date + "T10:00:01+08:00");
+  const before = completedUsThrough(now);
   const codes = ["159660", "513110", "159941", "513290"];
-  const rows = Array.from({ length: 1096 }, (_, i) => [
+  const length = (Date.parse(before) - Date.UTC(2022, 0, 1)) / 86_400_000 + 1;
+  const rows = Array.from({ length }, (_, i) => [
     new Date(Date.UTC(2022, 0, i + 1)).toISOString().slice(0, 10), 1_000 + i,
-  ]).filter(([day]) => day <= before);
+  ]).filter(([day]) => new Date(day).getUTCDay() % 6 !== 0);
+  const [previous, current] = rows.slice(-2).map(([day]) => day);
+  const closeSeries = (a, b) => ({ rows: [[previous, a], [current, b]], source: "test" });
   const premiums = new Map(codes.map((code, i) => [code, new Map(rows.filter(([day]) => day >= "2023-12-01")
     .map(([day]) => [day, { open: 1.02 + i * 0.005, nav: 1 }]))]));
   const navs = new Map(codes.map((code) => [code, { nav: 1, navDate: "2024-12-26", usableDay: "2025-01-02" }]));
@@ -330,12 +337,19 @@ function todayFixture(date = "2025-01-03") {
     asks: [{ price: 1, lots: 10_000 }],
   });
   return {
-    now: new Date(date + "T10:00:01+08:00"),
+    now,
     budget: 1_000_000,
     planState: { enabled: true, plan: null, trades: [] },
     history: { calendar, premiums, navs },
     indexes: Object.fromEntries(["NDX", "NBI"].map((index) => [index, { rows, source: "test", fresh: true }])),
     market: { mode: "upstream", funds: codes.slice(0, 3).map(quote), forecastQuote: quote("513290") },
+    riskInputs: {
+      closes: { equalWeight: closeSeries(100, 100), semiconductor: closeSeries(200, 201), vix: closeSeries(20, 19), treasury: closeSeries(4.5, 4.5) },
+      feeds: [
+        { feed: "fed", name: "美联储", available: true, scope: ["NDX", "NBI"], items: [] },
+        { feed: "reuters", name: "路透社", available: true, scope: ["NDX"], items: [] },
+      ],
+    },
   };
 }
 
@@ -471,7 +485,7 @@ test("the explained entry price also fits one lot after fees", () => {
 test("a failed fund valuation or optional index source leaves other eligible funds usable", () => {
   const fixture = todayFixture();
   fixture.history.navs.delete("159660");
-  fixture.indexes = {};
+  delete fixture.indexes.NDX;
   setAsk(fixture, "513110", 1.015, 1);
   setAsk(fixture, "159941", 1.015, 0.99);
   const [ndx, nbi] = todayDecision(fixture).groups;
@@ -488,6 +502,8 @@ test("stale quotes, the end of continuous trading and unreadable plan state bloc
   assert.equal(staleResult.totalCents, 0);
   assert.ok(staleResult.groups[0].candidates.every((item) =>
     item.reasons.includes("quoteUnavailable") && item.buyAt === null));
+  assert.equal(staleResult.groups[0].candidates[0].lastQuote.bestAsk, 1);
+  assert.equal(staleResult.groups[0].candidates[0].referenceBuyAt, 1.02);
 
   const nearLunch = todayFixture();
   nearLunch.market.funds[0].quoteAt = "2025-01-03T11:29:55+08:00";
@@ -499,4 +515,122 @@ test("stale quotes, the end of continuous trading and unreadable plan state bloc
   planFailure.planState.error = "test";
   assert.equal(todayDecision(planFailure).totalCents, 0);
   assert.ok(todayDecision(planFailure).groups[0].reasons.includes("planUnavailable"));
+});
+
+test("the same passing offer waits during a broad selloff and becomes eligible when one equity factor stabilizes", () => {
+  const fixture = todayFixture();
+  const { equalWeight, semiconductor, vix } = fixture.riskInputs.closes;
+  equalWeight.rows[1][1] = 96;
+  semiconductor.rows[1][1] = 179;
+  vix.rows[1][1] = 25;
+  const [blocked, biotech] = todayDecision(fixture).groups;
+  assert.equal(blocked.amountCents, 0);
+  assert.deepEqual(blocked.risk.blockers.map(({ code }) => code), ["equitySelloff"]);
+  assert.ok(blocked.candidates.every(({ reasons }) => !reasons.length));
+  assert.ok(biotech.amountCents > 0);
+  equalWeight.rows[1][1] = 100;
+  assert.ok(todayDecision(fixture).groups[0].amountCents > 0);
+});
+
+test("above the regular limit each of the three market confirmations can independently hold the supplement", () => {
+  const fixture = todayFixture("2025-01-16");
+  for (const quote of fixture.market.funds) setAsk(fixture, quote.code, 1.06, 1);
+  const group = () => todayDecision(fixture).groups[0];
+  const confirmed = group();
+  assert.equal(confirmed.decision.tier, "small");
+  assert.ok(confirmed.amountCents <= confirmed.smallRemainingCents);
+  for (const [key, value] of [["equalWeight", 99], ["semiconductor", 199], ["vix", 20]]) {
+    const close = fixture.riskInputs.closes[key].rows[1];
+    const priorValue = close[1];
+    close[1] = value;
+    const blocked = group();
+    assert.equal(blocked.amountCents, 0);
+    assert.equal(blocked.risk.smallWait.length, 1);
+    assert.deepEqual(blocked.candidates[0].reasons, ["marketConfirmation"]);
+    assert.equal(blocked.candidates[0].referenceBuyAt, 1.05);
+    assert.equal(blocked.candidates[0].priceOnlyBuyAt, 1.08);
+    setAsk(fixture, "159660", 1.05, 1);
+    assert.equal(group().decision.tier, "normal");
+    setAsk(fixture, "159660", 1.06, 1);
+    close[1] = priorValue;
+  }
+});
+
+test("a ten-basis-point rate increase holds both groups even when equities are stable", () => {
+  const fixture = todayFixture();
+  const close = fixture.riskInputs.closes.treasury.rows[1];
+  close[1] = 4.60;
+  assert.equal(todayDecision(fixture).marketRisk.factors.treasury.change, 10);
+  assert.deepEqual(todayDecision(fixture).groups.map(({ risk }) => risk.blockers[0].code), ["rateShock", "rateShock"]);
+  close[1] = 4.59;
+  assert.ok(todayDecision(fixture).groups.every(({ amountCents }) => amountCents > 0));
+});
+
+test("a relevant news report waits for the first full US session even if the order otherwise qualifies", () => {
+  const report = {
+    publishedAt: "2025-01-02T15:00:00Z", summary: "路透报道涉及英伟达的会计或监管调查",
+    scope: ["NDX"], kind: "report",
+  };
+  const pending = todayFixture();
+  pending.riskInputs.feeds[1].items.push(report);
+  const hold = todayDecision(pending);
+  assert.equal(hold.marketRisk.date, "2025-01-02");
+  assert.equal(hold.marketRisk.events[0].pending, true);
+  assert.equal(hold.groups[0].amountCents, 0);
+  assert.equal(hold.groups[0].risk.blockers[0].code, "eventPending");
+  assert.ok(hold.groups[1].amountCents > 0);
+  const next = todayFixture("2025-01-06");
+  next.riskInputs.feeds[1].items.push(report);
+  const release = todayDecision(next);
+  assert.equal(release.marketRisk.date, "2025-01-03");
+  assert.equal(release.marketRisk.events[0].pending, false);
+  assert.ok(release.groups[0].amountCents > 0);
+  next.riskInputs.feeds[0].items.push({ ...report,
+    scope: ["NDX", "NBI"], publishedAt: "2025-01-03T19:00:00Z", summary: "美联储发布利率决议", kind: "official" });
+  assert.ok(todayDecision(next).groups.every(({ amountCents, risk }) =>
+    amountCents === 0 && risk.blockers[0].code === "eventPending"));
+});
+
+test("a missing aligned equity close or corporate headline source blocks Nasdaq-100 only", () => {
+  const fixture = todayFixture();
+  fixture.riskInputs.closes.semiconductor.rows.pop();
+  fixture.riskInputs.feeds[1].available = false;
+  const [ndx, nbi] = todayDecision(fixture).groups;
+  assert.deepEqual(ndx.risk.blockers.map(({ code }) => code), ["marketDataUnavailable", "eventFeedUnavailable"]);
+  assert.equal(ndx.amountCents, 0);
+  assert.ok(nbi.amountCents > 0);
+  fixture.riskInputs.closes.treasury.rows.shift();
+  assert.equal(todayDecision(fixture).totalCents, 0);
+});
+
+test("US close cutoff uses New York time during both standard and daylight time", () => {
+  assert.equal(completedUsThrough(new Date("2026-11-24T05:14:00+08:00")), "2026-11-22");
+  assert.equal(completedUsThrough(new Date("2026-11-24T05:15:00+08:00")), "2026-11-23");
+  assert.equal(completedUsThrough(new Date("2026-07-15T04:15:00+08:00")), "2026-07-14");
+});
+
+test("event feed keeps original source types and ignores unrelated and future posts", () => {
+  const item = (title, date, id, publisher = '<source url="https://www.reuters.com">Reuters</source>') =>
+    `<item><title>${title}</title><link>https://news.google.com/rss/articles/${id}</link><pubDate>${date}</pubDate>${publisher}</item>`;
+  const xml = `<rss><channel>
+    ${item("Nvidia shares dip - Reuters", "2026-11-20T18:00:00Z", "1")}
+    ${item("Nvidia&apos;s accounting is a focus of US SEC investigation - Reuters", "2026-11-20T19:00:00Z", "2")}
+    ${item("Nvidia facing SEC probe - Reuters", "2026-11-20T20:00:00Z", "3")}
+    ${item("Microsoft facing SEC probe - Reuters", "2026-11-24T20:00:00Z", "4")}
+    ${item("Broadcom facing SEC probe - Reuters", "2026-11-20T19:00:00Z", "5", "<source>Other</source>")}
+    </channel></rss>`;
+  const events = parseEventFeed("reuters", xml, new Date("2026-11-23T08:00:00Z"));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "report");
+  assert.equal(events[0].publishedAt, "2026-11-20T19:00:00.000Z");
+  assert.equal(events[0].link, "https://news.google.com/rss/articles/2");
+  assert.match(events[0].title, /Nvidia's accounting/);
+  assert.throws(() => parseEventFeed("reuters", "<html>Unavailable</html>", new Date()), /未返回 RSS/);
+});
+
+test("official CSV closes select the named field and exclude dates after the cutoff", () => {
+  const us = 'Date,"1 Mo","10 Yr"\n11/23/2026,4.20,5.10\n11/20/2026,4.19,4.92\n11/19/2026,4.20,5.04\n';
+  assert.deepEqual(parseUsCloses(us, "10 Yr", "2026-11-15", "2026-11-20"),
+    [["2026-11-19", 5.04], ["2026-11-20", 4.92]]);
+  assert.throws(() => parseUsCloses(us, "CLOSE", "2026-11-15", "2026-11-20"), /列不完整/);
 });

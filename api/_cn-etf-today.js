@@ -1,4 +1,5 @@
 const { factorPolicy, factorGroups, calibrateFactor } = require("./_cn-etf-factor");
+const { assessMarketRisk } = require("./_cn-etf-risk");
 
 const monthlyPolicy = Object.freeze({
   version: "monthly-premium-v2",
@@ -92,14 +93,16 @@ function affordableLimit(limit, budgetCents) {
 
 function inspectFund({
   code, index, quote, marketMode, valuation, fittedPremium, late,
-  date, nowMs, remainingMonthCents, smallRemainingCents, groupBlocked,
+  date, nowMs, remainingMonthCents, smallRemainingCents, groupBlocked, smallWait, continuous,
 }) {
   const reasons = [];
   const quoteAge = nowMs - Date.parse(quote?.quoteAt);
-  const quoteFresh = marketMode === "upstream" && quote?.quoteAt?.slice(0, 10) === date &&
+  const quoteFresh = continuous && marketMode === "upstream" && quote?.quoteAt?.slice(0, 10) === date &&
     quoteAge >= -10_000 && quoteAge <= quoteMaxAgeMs;
-  const iopv = quoteFresh && quote.iopv > 0 ? quote.iopv : null;
-  const bestAsk = quoteFresh ? quote.asks[0]?.price ?? null : null;
+  const observedIopv = quote?.iopv > 0 ? quote.iopv : null;
+  const observedAsk = quote?.asks[0]?.price ?? null;
+  const iopv = quoteFresh ? observedIopv : null;
+  const bestAsk = quoteFresh ? observedAsk : null;
   if (!quoteFresh) reasons.push("quoteUnavailable");
   else if (!iopv) reasons.push("iopvUnavailable");
   else if (!bestAsk) reasons.push("noAsks");
@@ -109,7 +112,7 @@ function inspectFund({
   if (normalPremium === undefined) reasons.push("calibrationUnavailable");
   const normalLimit = valuation && normalPremium !== undefined ? limitAtTick(valuation.nav, normalPremium) : null;
   const smallLimit = valuation && late ? limitAtTick(valuation.nav, monthlyPolicy.maximumPremium) : null;
-  const iopvLimit = index === "NDX" && iopv ? limitAtTick(iopv, monthlyPolicy.maximumPremium) : null;
+  const iopvLimit = index === "NDX" && observedIopv ? limitAtTick(observedIopv, monthlyPolicy.maximumPremium) : null;
   const askPremium = bestAsk && iopv ? bestAsk / iopv - 1 : null;
   const strategyMax = smallLimit ?? normalLimit;
   if (bestAsk && strategyMax !== null && bestAsk > strategyMax + precision) reasons.push("askAboveLimit");
@@ -125,26 +128,31 @@ function inspectFund({
   if (small && bestAsk <= smallLimit + precision && remainingOrderCents === 0 && remainingMonthCents > 0) {
     reasons.push("smallBudgetUsed");
   }
+  if (small && smallWait.length) reasons.push("marketConfirmation");
 
   let order = { shares: 0, amountCents: 0 };
   if (!groupBlocked && !reasons.length && effectiveLimit !== null) {
     order = estimateLots(quote.asks, effectiveLimit, remainingOrderCents);
     if (!order.shares) reasons.push("belowLot");
   }
-  // 目标价根据两档分别计算。价格跌到正常线以内时，额度也会按正常档重新算。
   const normalBuyAt = affordableLimit(normalCap, remainingMonthCents);
   const smallBuyAt = affordableLimit(smallCap, smallRemainingCents);
-  const highestBuyPrice = smallBuyAt !== null && smallBuyAt > normalLimit ? smallBuyAt : normalBuyAt;
-  const buyAt = iopv ? highestBuyPrice : null;
+  const priceOnlyBuyAt = observedIopv && (smallBuyAt !== null && smallBuyAt > normalLimit ? smallBuyAt : normalBuyAt);
+  const referenceBuyAt = observedIopv && (smallWait.length ? normalBuyAt : priceOnlyBuyAt);
+  const lastQuote = quote && !quoteFresh ? {
+    bestAsk: observedAsk, iopv: observedIopv, lastPrice: quote.lastPrice,
+    premium: observedIopv ? (observedAsk ?? quote.lastPrice) / observedIopv - 1 : null,
+  } : null;
   return {
     code, name: quote?.manager ?? "", quoteAt: quote?.quoteAt ?? null, bestAsk, iopv, askPremium,
     nav: valuation?.nav ?? null, navDate: valuation?.navDate ?? null, normalLimit, smallLimit,
-    iopvLimit, effectiveLimit, buyAt, tier, remainingOrderCents, reasons, ...order,
+    iopvLimit, effectiveLimit, buyAt: quoteFresh ? referenceBuyAt : null,
+    referenceBuyAt, priceOnlyBuyAt, lastQuote, tier, remainingOrderCents, reasons, ...order,
   };
 }
 
 function inspectGroup({
-  index, reference, quotes, history, calibration, sum, budgetCents, installments, totalRemaining, session, date, nowMs, marketMode,
+  index, reference, quotes, history, calibration, sum, budgetCents, installments, totalRemaining, session, date, nowMs, marketMode, risk,
 }) {
   const members = indexesToCodes[index];
   const groupBudgetCents = Math.floor(budgetCents * (members.length / codes.length));
@@ -159,10 +167,12 @@ function inspectGroup({
   const reasons = [...session.reasons];
   if (availableCents === 0) reasons.push("planBudgetUsed");
   else if (remainingMonthCents === 0) reasons.push("monthlyBudgetUsed");
+  if (risk.blockers.length) reasons.push("marketRisk");
+  const smallWait = late ? risk.smallWait : [];
   const candidates = members.map((code) => inspectFund({
     code, index, quote: quotes.get(code), marketMode, valuation: history.navs.get(code),
     fittedPremium: calibration.funds[code]?.premiumLimit, late, date, nowMs, remainingMonthCents, smallRemainingCents,
-    groupBlocked: reasons.length > 0,
+    groupBlocked: reasons.length > 0, smallWait, continuous: session.endsAt !== null,
   }));
   const eligible = candidates.filter((item) => item.amountCents > 0)
     .sort((a, b) => a.askPremium - b.askPremium || a.code.localeCompare(b.code));
@@ -172,7 +182,7 @@ function inspectGroup({
   const before = reference?.rows.at(-2);
   const indicator = calibration.groups[index];
   return {
-    index, decision, candidates, reasons,
+    index, decision, candidates, reasons, risk: { blockers: risk.blockers, smallWait },
     close: latest ? { date: latest[0], value: latest[1], dailyReturn: before ? latest[1] / before[1] - 1 : null,
       source: reference.source, fresh: reference.fresh } : null,
     signal: indicator?.states.at(-1) ?? null, volatilityLimit: indicator?.volatilityLimit ?? null,
@@ -181,7 +191,7 @@ function inspectGroup({
   };
 }
 
-function todayDecision({ now, budget, planState, history, indexes, market }) {
+function todayDecision({ now, budget, planState, history, indexes, market, riskInputs }) {
   const clock = chinaClock(now);
   const month = clock.date.slice(0, 7);
   const plan = planState.plan ?? { budget, startMonth: month };
@@ -197,6 +207,7 @@ function todayDecision({ now, budget, planState, history, indexes, market }) {
   const exposure = summarizePlan(planState.trades, month, budgetCents);
   const inputRows = Object.fromEntries(Object.entries(indexes).map(([index, { rows }]) => [index, rows]));
   const calibration = calibrateFactor(inputRows, history.premiums);
+  const { groups: riskByIndex, ...marketRisk } = assessMarketRisk({ now, indexes, riskInputs });
   const quotesByCode = new Map([...(market?.funds ?? []), ...(market?.forecastQuote ? [market.forecastQuote] : [])]
     .map((quote) => [quote.code, quote]));
   let totalRemaining = exposure.remainingCents;
@@ -205,6 +216,7 @@ function todayDecision({ now, budget, planState, history, indexes, market }) {
       index, reference: indexes[index], quotes: quotesByCode, history, calibration, session, installments,
       sum: exposure.groups[index], budgetCents, totalRemaining, date: clock.date,
       nowMs: now.getTime(), marketMode: market?.mode,
+      risk: riskByIndex[index],
     });
     totalRemaining -= verdict.amountCents;
     return verdict;
@@ -217,7 +229,7 @@ function todayDecision({ now, budget, planState, history, indexes, market }) {
     preview: !planState.plan, planState, holdings: exposure.positions,
     boughtCents: exposure.boughtCents, remainingCents: exposure.remainingCents,
     totalCents: groups.reduce((sum, group) => sum + group.amountCents, 0),
-    groups, quoteMode: market?.mode ?? null,
+    groups, marketRisk, quoteMode: market?.mode ?? null,
     orderExpiresAt: orderExpiries.length ? new Date(Math.min(session.endsAt, ...orderExpiries)).toISOString() : null,
   };
 }

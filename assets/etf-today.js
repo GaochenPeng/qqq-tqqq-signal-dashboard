@@ -34,6 +34,7 @@ const reasonLabels = {
   smallBudgetUsed: "小笔额度已用完，等待正常限价",
   planBudgetUsed: "计划本金或本组预算已用完",
   belowLot: "剩余额度或限价内卖盘不足一手",
+  marketConfirmation: "小额档还在等盘面确认",
 };
 let planState;
 let decision;
@@ -141,53 +142,107 @@ function renderGroup(group, preview) {
 
 function renderWhy(group) {
   const explanation = el("div", "", "etf-today-explanation");
-  const withPrices = group.candidates.filter((item) => item.bestAsk != null && item.iopv != null);
-  const nearest = withPrices.filter((item) => item.buyAt != null)
-    .sort((a, b) => a.bestAsk / a.buyAt - b.bestAsk / b.buyAt)[0];
-  const quote = group.decision ?? nearest ?? withPrices.sort((a, b) => a.askPremium - b.askPremium)[0]
-    ?? group.candidates.find((item) => item.buyAt != null);
-  const block = group.reasons.find((reason) => reason !== "noEligibleFund");
-  const premiumBlocks = quote?.buyAt === quote?.iopvLimit && quote?.reasons.includes("iopvPremiumAboveLimit");
-  const priceReason = premiumBlocks ? "iopvPremiumAboveLimit" : quote?.reasons[0];
-  const reason = block ?? priceReason ?? group.candidates.flatMap((item) => item.reasons)[0];
-  if (!group.decision && reason) explanation.append(el("p", reasonLabels[reason] + "。"));
+  const candidates = group.candidates.map((item) => ({
+    ...item,
+    ask: item.bestAsk ?? item.lastQuote?.bestAsk ?? item.lastQuote?.lastPrice,
+    reference: item.iopv ?? item.lastQuote?.iopv,
+    premium: item.askPremium ?? item.lastQuote?.premium,
+  }));
+  const priced = candidates.filter((item) => item.ask != null && item.reference != null);
+  const nearest = priced.filter((item) => item.referenceBuyAt != null)
+    .sort((a, b) => a.ask / a.referenceBuyAt - b.ask / b.referenceBuyAt)[0];
+  const quote = candidates.find((item) => item.code === group.decision?.code)
+    ?? nearest ?? priced.sort((a, b) => a.premium - b.premium)[0] ?? candidates[0];
+  const block = group.reasons.find((reason) => reasonLabels[reason] && reason !== "noEligibleFund");
+  const priceReason = quote?.reasons.find((reason) => reason !== "marketConfirmation");
+  const why = block ?? priceReason;
+  if (!group.decision && why) explanation.append(el("p", reasonLabels[why] + "。"));
+  for (const reason of group.risk.blockers) explanation.append(el("p", reason.why));
 
-  if (quote?.bestAsk != null) {
-    const { code, bestAsk, iopv, askPremium } = quote;
-    const difference = bestAsk - iopv;
-    const comparison = askPremium > 0
-      ? `每份多付 ${price(difference, 4)} 元（${percent(askPremium)}）。`
-      : askPremium < 0 ? `每份比参考值低 ${price(-difference, 4)} 元。` : "卖价和参考值相同。";
-    explanation.append(el("p", `${code} 最低卖 ${price(bestAsk)} 元，背后的资产每份参考值约 ${price(iopv, 4)} 元。${comparison}`));
+  if (quote?.ask != null && quote.reference != null) {
+    const difference = quote.ask - quote.reference;
+    const comparison = difference > 0
+      ? `每份贵 ${price(difference, 4)} 元（${percent(quote.premium)}）。`
+      : difference < 0 ? `每份低 ${price(-difference, 4)} 元。` : "价格和参考净值相同。";
+    const label = quote.lastQuote ? (quote.lastQuote.bestAsk ? "最近卖一" : "最近成交价") : "卖一";
+    explanation.append(el("p", `${quote.code} ${label} ${price(quote.ask)} 元，参考净值每份 ${price(quote.reference, 4)} 元。${comparison}`));
   }
   if (group.decision) {
     const label = quote.tier === "small" ? "小笔" : "常规";
-    explanation.append(el("p", `卖价已到 ${price(quote.effectiveLimit)} 元以内，本月还有额度。这次按${label}分批试算，金额含费用。`));
-  } else if (quote?.buyAt != null) {
-    const gap = quote.bestAsk == null ? 0 : quote.bestAsk - quote.buyAt;
-    const threshold = `${price(quote.buyAt)} 元或更低`;
-    const detail = gap > 1e-10
-      ? `最低卖价降到 ${threshold}，才到买价。现在还差 ${price(gap)} 元/份。`
-      : `最低卖价到 ${threshold}，价格条件就过关。`;
-    const label = quote.bestAsk == null ? quote.code + " " : "";
-    explanation.append(el("p", `按这次参考值，${label}${detail}`, "etf-today-target"));
+    explanation.append(el("p", `市场条件已过关，卖一也在 ${price(quote.effectiveLimit)} 元以内。用本月剩余额度按${label}档买，金额含费用。`));
+  } else if (quote?.referenceBuyAt != null) {
+    const gap = quote.ask - quote.referenceBuyAt;
+    const threshold = `${price(quote.referenceBuyAt)} 元`;
+    const aim = gap > 1e-10
+      ? `卖一要降到 ${threshold} 或更低，每份还差 ${price(gap)} 元。`
+      : `卖一在 ${threshold} 或以下，价格条件就过关。`;
+    explanation.append(el("p", `${quote.lastQuote ? "按最近参考净值估算，" : ""}${aim}`, "etf-today-target"));
   }
+  if (!group.decision && quote?.priceOnlyBuyAt > quote.referenceBuyAt && group.risk.smallWait.length) {
+    explanation.append(el("p", `若卖一只回到小额档的 ${price(quote.priceOnlyBuyAt)} 元以内，还要等${group.risk.smallWait.join("、")}。`));
+  }
+  for (const reason of group.risk.blockers) explanation.append(el("p", reason.next, "etf-today-target"));
   return explanation;
 }
 
 function renderCandidate(candidate, group) {
   const { code, name, bestAsk, iopv, askPremium, normalLimit, smallLimit, iopvLimit, navDate, quoteAt, reasons } = candidate;
   const selected = group.decision?.code === code;
+  const recent = candidate.lastQuote;
   const outcome = reasons.length ? reasons.map((key) => reasonLabels[key]).join("、")
     : selected ? "通过 · 已选中" : group.reasons.length ? "价格条件通过" : "通过 · 未选中";
   const strategyPrice = smallLimit == null ? price(normalLimit) : `${price(normalLimit)} / ${price(smallLimit)}`;
   const row = tableRow([
-    [code, name].filter(Boolean).join(" "), price(bestAsk), price(iopv, 4), percent(askPremium), strategyPrice,
-    price(iopvLimit), price(candidate.buyAt), quoteAt ? quoteClock.format(Date.parse(quoteAt)) : "—", outcome,
+    [code, name].filter(Boolean).join(" "), price(bestAsk ?? recent?.bestAsk), price(iopv ?? recent?.iopv, 4),
+    percent(askPremium ?? recent?.premium), strategyPrice,
+    price(iopvLimit), price(candidate.referenceBuyAt), quoteAt ? quoteClock.format(Date.parse(quoteAt)) : "—", outcome,
   ]);
   row.dataset.code = code;
+  if (recent) row.cells[7].append(el("small", group.reasons.includes("outsideTradingHours")
+    ? "非交易时段，仅供参考" : "最近报价，仅供参考"));
+  if (recent && !recent.bestAsk) row.cells[3].append(el("small", "按最近成交价"));
   if (navDate) row.cells[4].append(el("small", `${smallLimit == null ? "" : "正常 / 小笔 · "}${navDate} 净值`));
   return row;
+}
+
+function sourceLink(label, url) {
+  const link = el("a", label);
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  return link;
+}
+
+function renderMarketRisk(risk) {
+  at("etfTodayEvidence").hidden = false;
+  at("etfTodayMarketDate").textContent = risk.date
+    ? `美股 ${risk.date} 收盘，对比 ${risk.beforeDate}。消息时间为北京时间。`
+    : "暂时缺少可核对的近期美股收盘。";
+  const factorCells = Object.entries(risk.factors).map(([key, item]) => {
+    const cell = el("div", "");
+    const name = el("dt", item.url ? "" : item.label);
+    if (item.url) name.append(sourceLink(item.label, item.url));
+    const sign = item.change > 0 ? "+" : "";
+    const value = key === "treasury" && item.latest != null ? `${item.latest.toFixed(2)}%` : price(item.latest, 2);
+    const movement = key === "treasury" ? `${item.change} 个基点` : percent(item.change);
+    const result = item.available ? `${value} · ${sign}${movement}` : "缺少同日数据";
+    cell.append(name, el("dd", result), el("dd", [item.date, item.source].filter(Boolean).join(" · "), "muted"));
+    return cell;
+  });
+  at("etfTodayFactors").replaceChildren(...factorCells);
+  const eventRows = risk.events.slice(0, 5).map((event) => {
+    const item = el("li", "");
+    item.append(sourceLink(event.summary, event.link));
+    item.lastChild.title = event.title;
+    const time = quoteClock.format(Date.parse(event.publishedAt));
+    const status = event.pending ? "等完整美股收盘" : "已有完整美股收盘";
+    const kind = event.kind === "official" ? "官方发布" : "媒体报道";
+    item.append(el("span", ` · ${time} · ${kind} · ${status}`, "muted"));
+    return item;
+  });
+  at("etfTodayEvents").replaceChildren(...eventRows);
+  const missing = risk.missingFeeds.length ? `暂缺 ${risk.missingFeeds.join("、")}。` : "";
+  at("etfTodayEventStatus").textContent = missing || (eventRows.length ? "" : "关注来源最近七天暂无命中规则的消息。");
 }
 
 function renderDecision(data) {
@@ -203,6 +258,7 @@ function renderDecision(data) {
   at("etfPlanUsed").textContent = data.preview ? "—" : money(data.boughtCents);
   at("etfPlanRemaining").textContent = data.preview ? "—" : money(data.remainingCents);
   at("etfTodayGroups").replaceChildren(...data.groups.map((group) => renderGroup(group, data.preview)));
+  renderMarketRisk(data.marketRisk);
   at("etfTodayQuoteDetails").hidden = false;
   at("etfTodayQuotes").replaceChildren(...data.groups.flatMap((group) =>
     group.candidates.map((candidate) => renderCandidate(candidate, group))));
@@ -242,8 +298,9 @@ async function refreshToday() {
   enableActions();
   at("etfTodayAmount").textContent = "待刷新";
   at("etfTodayGroups").replaceChildren();
+  at("etfTodayEvidence").hidden = true;
   at("etfTodayQuoteDetails").hidden = true;
-  setStatus("etfTodayStatus", "正在核对卖盘、当日参考净值和计划余额…");
+  setStatus("etfTodayStatus", "正在核对最新消息、美股收盘、ETF 卖盘和已录入成交…");
   try {
     const data = await requestJson(`/api/cn-etf-today?budget=${budgetInput.valueAsNumber}`, {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(28_000)]),
